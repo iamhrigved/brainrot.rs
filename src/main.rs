@@ -1,9 +1,13 @@
 use sigma::Sigma;
 use std::env;
 
+pub mod error;
+pub mod parser;
 pub mod scanner;
 pub mod sigma;
-pub mod tokens;
+pub mod token;
+
+use std::string::String;
 
 fn main() {
     let args: Vec<String> = env::args().collect();

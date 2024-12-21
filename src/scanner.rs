@@ -1,34 +1,32 @@
 #![allow(clippy::new_without_default)]
 
-// TODO: IMPLEMENT LINE AND COL INSTEAD OF LINE AND CURRENT
-
 use core::f64;
 use std::collections::HashMap;
 use std::string::String;
 
-use crate::sigma::Sigma;
-use crate::tokens::TokenType::*;
-use crate::tokens::*;
+use crate::error::Error;
+use crate::token::{Token, Token::*};
 
 #[derive(Debug)]
 pub struct Scanner {
     source: String,                       // Full source code
-    tokens: Vec<Token>,                   // List of all the tokens
-    keywords: HashMap<String, TokenType>, // All keywords in Sigma.rs
+    pub keywords: HashMap<String, Token>, // All keywords in Sigma.rs
+    pub linenum: usize,                   // Current line
+    pub colnum: usize,                    // Current column
+    pub token_len: usize,                 // Length of the current token
     start: usize,                         // Token start index
-    current: usize,                       // Current position of the scanner
-    line: usize,                          // Current line
+    cur_char: usize,                      // Current position of the scanner
 }
 
 impl Scanner {
-    pub fn new() -> Scanner {
+    pub fn new(source: String) -> Scanner {
         let mut keywords = HashMap::new();
 
         // All keywords
         keywords.insert("if".to_string(), If);
         keywords.insert("else".to_string(), Else);
-        keywords.insert("true".to_string(), True);
-        keywords.insert("false".to_string(), False);
+        keywords.insert("true".to_string(), Boolean(true));
+        keywords.insert("false".to_string(), Boolean(false));
         keywords.insert("and".to_string(), And);
         keywords.insert("or".to_string(), Or);
         keywords.insert("let".to_string(), Let);
@@ -43,95 +41,90 @@ impl Scanner {
         keywords.insert("nil".to_string(), Nil);
 
         Scanner {
-            source: "".to_string(),
-            tokens: vec![],
+            source,
             keywords,
             start: 0,
-            current: 0,
-            line: 1,
+            cur_char: 0,
+            linenum: 1,
+            colnum: 0, // 0 because it changes at character consumption
+            token_len: 0,
         }
     }
 
-    pub fn run(&mut self, source: String) {
-        self.source = source;
-        self.scan_tokens();
-    }
+    pub fn next_token(&mut self) -> Result<Token, Error> {
+        let c = match self.consume_char() {
+            Some(char) => char,
+            None => return Ok(Eof),
+        };
 
-    fn scan_tokens(&mut self) {
-        while !self.is_at_end() {
-            self.start = self.current;
-            self.scan_token();
-        }
+        let ret_token = match c {
+            // If whitespace, return the next token
+            c if c.is_whitespace() => {
+                if c == '\n' {
+                    self.linenum += 1;
+                }
 
-        let last_token = Token::new(Eof, "".to_string(), self.line);
-        self.tokens.push(last_token);
-    }
-
-    fn is_at_end(&self) -> bool {
-        self.current >= self.source.len()
-    }
-
-    fn scan_token(&mut self) {
-        let c = self.advance();
-        match c {
-            // Whitespace
-            ' ' | '\r' | '\t' => (),
-            '\n' => self.line += 1,
+                self.start = self.cur_char;
+                self.next_token()
+            }
 
             // Single character lexemes
-            '(' => self.add_token(LeftParen),
-            ')' => self.add_token(RightParen),
-            '{' => self.add_token(LeftBrace),
-            '}' => self.add_token(RightBrace),
-            ',' => self.add_token(Comma),
-            '.' => self.add_token(Dot),
-            '-' => self.add_token(Minus),
-            '+' => self.add_token(Plus),
-            ';' => self.add_token(Semicolon),
-            '*' => self.add_token(Star),
+            '(' => Ok(LeftParen),
+            ')' => Ok(RightParen),
+            '{' => Ok(LeftBrace),
+            '}' => Ok(RightBrace),
+            ',' => Ok(Comma),
+            '.' => Ok(Dot),
+            '-' => Ok(Minus),
+            '+' => Ok(Plus),
+            ';' => Ok(Semicolon),
+            '*' => Ok(Star),
+            '?' => Ok(Question),
+            ':' => Ok(Colon),
 
             // Double character lexemes
             '!' => {
-                let token = if self.match_next('=') {
+                let token = if self.match_next_char('=') {
                     BangEqual
                 } else {
                     Bang
                 };
-                self.add_token(token)
+                Ok(token)
             }
             '=' => {
-                let token = if self.match_next('=') {
+                let token = if self.match_next_char('=') {
                     EqualEqual
                 } else {
                     Equal
                 };
-                self.add_token(token)
+                Ok(token)
             }
             '<' => {
-                let token = if self.match_next('=') {
+                let token = if self.match_next_char('=') {
                     LessEqual
                 } else {
                     Less
                 };
-                self.add_token(token)
+                Ok(token)
             }
             '>' => {
-                let token = if self.match_next('=') {
+                let token = if self.match_next_char('=') {
                     GreaterEqual
                 } else {
                     Greater
                 };
-                self.add_token(token)
+                Ok(token)
             }
 
             // Comments
             '/' => {
-                if self.match_next('/') {
-                    while self.peek() != '\n' && !self.is_at_end() {
-                        self.advance();
+                if self.match_next_char('/') {
+                    while self.peek_char() != '\n' && !self.is_at_end() {
+                        self.consume_char();
                     }
+                    self.next_token()
                 } else {
-                    self.add_token(Slash)
+                    Ok(Slash)
                 }
             }
 
@@ -142,144 +135,146 @@ impl Scanner {
             c => {
                 // Numbers
                 if self.is_digit(c) {
-                    self.manage_numbers();
+                    self.manage_numbers()
                 }
                 // Identifiers
                 else if self.is_alpha(c) {
-                    self.manage_identifiers();
+                    self.manage_identifiers()
                 }
-                // Default, if no lexeme found
+                // Default, if no valid lexeme found
                 else {
-                    self.report_error(format!("Unexpected character '{}'!", c).to_string());
+                    Err(Error::UnexpectedToken(
+                        format!("Unexpected character '{}'!", c).to_string(),
+                    ))
                 }
             }
-        }
+        }?; // < look here
+
+        self.token_len = ret_token.len();
+        self.start = self.cur_char;
+        Ok(ret_token)
     }
 
-    // To add tokens whose Literal type is NullValue
-    fn add_token(&mut self, token_type: TokenType) {
-        let text = self
-            .source
-            .get(self.start..self.current)
-            .unwrap()
-            .to_string();
-
-        self.tokens.push(Token::new(token_type, text, self.line));
+    pub fn get_line(&self, linenum: usize) -> Option<&str> {
+        self.source.lines().nth(linenum - 1)
     }
 
-    fn report_error(&self, message: String) {
-        Sigma::error(self.source.clone(), self.current - 1, message);
+    fn is_at_end(&self) -> bool {
+        self.cur_char >= self.source.len()
     }
 
     // Move one character ahead
-    fn advance(&mut self) -> char {
-        let char = self.source.chars().nth(self.current).unwrap();
-        self.current += 1;
-        char
+    fn consume_char(&mut self) -> Option<char> {
+        let char = self.source.chars().nth(self.cur_char)?;
+
+        self.cur_char += 1;
+
+        if char == '\n' {
+            self.colnum = 0;
+        } else {
+            self.colnum += 1;
+        }
+
+        Some(char)
     }
 
     // Matching the next char and advancing one char ahead
-    fn match_next(&mut self, expected_char: char) -> bool {
+    fn match_next_char(&mut self, expected_char: char) -> bool {
         // if already at the end
         if self.is_at_end() {
             return false;
         }
 
-        let next_char = self.source.chars().nth(self.current).unwrap();
+        let next_char = self.source.chars().nth(self.cur_char).unwrap();
 
         if next_char != expected_char {
             return false;
         }
 
-        self.current += 1;
+        self.cur_char += 1;
         true
     }
 
     // Just peeking the current unconsumed char
-    fn peek(&self) -> char {
+    fn peek_char(&self) -> char {
         if self.is_at_end() {
             return '\0';
         };
-        self.source.chars().nth(self.current).unwrap()
+        self.source.chars().nth(self.cur_char).unwrap()
     }
-    fn peek_next(&self) -> char {
-        if self.current >= self.source.len() {
+    fn peek_next_char(&self) -> char {
+        if self.cur_char >= self.source.len() {
             return '\0';
         };
-        self.source.chars().nth(self.current + 1).unwrap()
+        self.source.chars().nth(self.cur_char + 1).unwrap()
     }
 
-    fn manage_strings(&mut self) {
-        while self.peek() != '"' && !self.is_at_end() {
-            if self.peek() == '\n' {
-                self.line += 1;
+    fn manage_strings(&mut self) -> Result<Token, Error> {
+        while self.peek_char() != '"' && !self.is_at_end() {
+            if self.peek_char() == '\n' {
+                self.linenum += 1;
             }
-            self.advance();
+            self.consume_char();
         }
 
         if self.is_at_end() {
-            self.report_error("Unterminated string!".to_string());
-            return;
+            return Err(Error::UnterminatedString("'\"' expected".to_string()));
         }
 
         // Also pass the closing "
-        self.advance();
+        self.consume_char();
 
         let string_text = self
             .source
-            .get(self.start + 1..self.current - 1)
+            .get(self.start + 1..self.cur_char - 1)
             .unwrap()
             .to_string();
-        self.add_token(String(string_text))
+
+        Ok(String(string_text))
     }
 
-    fn manage_numbers(&mut self) {
-        while self.is_digit(self.peek()) {
-            self.advance();
+    fn manage_numbers(&mut self) -> Result<Token, Error> {
+        while self.is_digit(self.peek_char()) {
+            self.consume_char();
         }
 
-        if self.peek() == '.' && self.is_digit(self.peek_next()) {
-            self.advance(); // Consume the '.'
+        if self.peek_char() == '.' && self.is_digit(self.peek_next_char()) {
+            self.consume_char(); // Consume the '.'
 
-            while self.is_digit(self.peek()) {
-                self.advance();
+            while self.is_digit(self.peek_char()) {
+                self.consume_char();
             }
         }
 
-        let number: f64 = self
-            .source
-            .get(self.start..self.current)
-            .unwrap()
-            .parse()
-            .unwrap();
+        let number_str = self.source.get(self.start..self.cur_char).unwrap();
 
-        self.add_token(Number(number));
+        let number = number_str.parse::<f64>().unwrap();
+        Ok(Number(number))
     }
 
-    fn manage_identifiers(&mut self) {
-        while self.is_alpha_numeric(self.peek()) {
-            self.advance();
+    fn manage_identifiers(&mut self) -> Result<Token, Error> {
+        while self.is_alpha_numeric(self.peek_char()) {
+            self.consume_char();
         }
 
         let text = self
             .source
-            .get(self.start..self.current)
+            .get(self.start..self.cur_char)
             .unwrap()
             .to_string();
 
-        if let Some(token_type) = self.keywords.get(&text) {
-            self.add_token(token_type.clone());
-            return;
+        if let Some(token_ref) = self.keywords.get(&text) {
+            return Ok(token_ref.to_owned());
         }
 
-        self.add_token(Identifier(text));
+        Ok(Identifier(text))
     }
 
     fn is_digit(&self, c: char) -> bool {
-        '0' <= c && c <= '9'
+        c.is_ascii_digit()
     }
     fn is_alpha(&self, c: char) -> bool {
-        ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || c == '_'
+        c.is_ascii_alphabetic() || c == '_'
     }
     fn is_alpha_numeric(&self, c: char) -> bool {
         self.is_digit(c) || self.is_alpha(c)

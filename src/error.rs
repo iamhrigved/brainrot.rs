@@ -3,39 +3,107 @@ use core::fmt;
 use std::io;
 use std::io::Write;
 
+pub struct Error {
+    pub err_type: ErrorType,
+    pub message: String,
+    pub err_linenum: usize,
+}
+
 #[derive(Debug, Clone)]
-pub enum Error {
-    SyntaxError(String),
-    UnexpectedToken(String),
-    UnterminatedString(String),
+pub enum ErrorType {
+    SyntaxError,
+    InterpreterError,
+    TypeError,
+    VariableNotDeclared,
+    VariableNotFound,
+    InvalidAssignmentTarget,
+    UnexpectedToken,
+    UnterminatedString,
+    UnsupportedOperation,
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::SyntaxError(msg) => write!(f, "{} {}", "Syntax Error:".bright_red().bold(), msg),
-            Error::UnexpectedToken(msg) => {
-                write!(f, "{} {}", "Unexpected Token:".bright_red().bold(), msg)
+        let mut print_err = match self.err_type {
+            ErrorType::SyntaxError => {
+                format!("{} {}", "Syntax Error:".bright_red().bold(), self.message)
             }
-            Error::UnterminatedString(msg) => {
-                write!(f, "{} {}", "Unterminated String:".bright_red().bold(), msg)
+            ErrorType::InterpreterError => {
+                format!(
+                    "{} {}",
+                    "Interpreter Error:".bright_red().bold(),
+                    self.message
+                )
             }
-        }
+            ErrorType::TypeError => {
+                format!("{} {}", "Type Error:".bright_red().bold(), self.message)
+            }
+            ErrorType::VariableNotDeclared => {
+                format!(
+                    "{} {}",
+                    "Variable Not Declared:".bright_red().bold(),
+                    self.message
+                )
+            }
+            ErrorType::VariableNotFound => {
+                format!(
+                    "{} {}",
+                    "Variable Not Found:".bright_red().bold(),
+                    self.message
+                )
+            }
+            ErrorType::InvalidAssignmentTarget => {
+                format!(
+                    "{} {}",
+                    "Invalid Assignment: ".bright_red().bold(),
+                    self.message
+                )
+            }
+            ErrorType::UnexpectedToken => {
+                format!(
+                    "{} {}",
+                    "Unexpected Token:".bright_red().bold(),
+                    self.message
+                )
+            }
+            ErrorType::UnterminatedString => {
+                format!(
+                    "{} {}",
+                    "Unterminated String:".bright_red().bold(),
+                    self.message
+                )
+            }
+            ErrorType::UnsupportedOperation => {
+                format!(
+                    "{} {}",
+                    "Unsopported Operation:".bright_red().bold(),
+                    self.message
+                )
+            }
+        };
+
+        print_err.push_str(&format!("\n [line {}]", self.err_linenum));
+
+        write!(f, "{}", print_err)
     }
 }
 
 impl Error {
-    pub fn display(self, line: String, pos: (usize, usize), len: usize) {
-        let digits_line = pos.0.ilog10() + 1;
+    pub fn new(err_type: ErrorType, message: String, err_linenum: usize) -> Self {
+        Self {
+            err_type,
+            message,
+            err_linenum,
+        }
+    }
+    pub fn display(self, line: String) {
+        let digits_line = match self.err_linenum {
+            0 => 1,
+            _ => self.err_linenum.ilog10() + 1,
+        };
 
         // print the error message
-        println!("{}", self);
-        println!(
-            "{} line {}:{}",
-            " -->".bright_magenta().bold(),
-            pos.0,
-            pos.1
-        );
+        println!("\n{}", self);
 
         // print "|" character before the erroneous line
         for _ in 0..digits_line + 1 {
@@ -46,8 +114,8 @@ impl Error {
 
         // print the erroneous line
         println!(
-            "{}   {}",
-            format!("{} |", pos.0).bright_magenta().bold(),
+            "{} {}",
+            format!("{} |", self.err_linenum).bright_magenta().bold(),
             line
         );
 
@@ -56,25 +124,6 @@ impl Error {
             print!(" ");
             io::stdout().flush().unwrap();
         }
-        print!("{}", "|".bright_magenta().bold());
-        io::stdout().flush().unwrap();
-
-        if len != 0 {
-            for _ in 0..pos.1 - len + 3 {
-                print!(" ");
-                io::stdout().flush().unwrap();
-            }
-            for _ in 0..len {
-                print!("{}", "^".bright_magenta().bold());
-                io::stdout().flush().unwrap();
-            }
-            println!(" {}\n", "Here".bright_magenta().bold());
-        } else {
-            for _ in 0..pos.1 - len + 2 {
-                print!(" ");
-                io::stdout().flush().unwrap();
-            }
-            println!("{}\n", "^ Here".bright_magenta().bold());
-        }
+        println!("{}", "|".bright_magenta().bold());
     }
 }

@@ -4,18 +4,18 @@ use core::f64;
 use std::collections::HashMap;
 use std::string::String;
 
-use crate::error::Error;
-use crate::token::{Token, Token::*};
+use crate::error::{Error, ErrorType};
+use crate::token::{Token, TokenType, TokenType::*};
 
 #[derive(Debug)]
 pub struct Scanner {
-    source: String,                       // Full source code
-    pub keywords: HashMap<String, Token>, // All keywords in Sigma.rs
-    pub linenum: usize,                   // Current line
-    pub colnum: usize,                    // Current column
-    pub token_len: usize,                 // Length of the current token
-    start: usize,                         // Token start index
-    cur_char: usize,                      // Current position of the scanner
+    source: String,                           // Full source code
+    pub keywords: HashMap<String, TokenType>, // All keywords in Sigma.rs
+    pub linenum: usize,                       // Current line
+    pub colnum: usize,                        // Current column
+    pub token_len: usize,                     // Length of the current token
+    start: usize,                             // Token start index
+    cur_char: usize,                          // Current position of the scanner
 }
 
 impl Scanner {
@@ -51,21 +51,34 @@ impl Scanner {
         }
     }
 
-    pub fn next_token(&mut self) -> Result<Token, Error> {
+    pub fn next_token(&mut self) -> Token {
+        match self.scan_token() {
+            Ok(tt) => Token::new(tt, self.linenum),
+
+            Err(err) => {
+                err.display(self.get_line(self.linenum).unwrap().to_string());
+                self.next_token()
+            }
+        }
+    }
+
+    fn scan_token(&mut self) -> Result<TokenType, Error> {
         let c = match self.consume_char() {
             Some(char) => char,
             None => return Ok(Eof),
         };
 
-        let ret_token = match c {
+        let ret_token_type = match c {
             // If whitespace, return the next token
             c if c.is_whitespace() => {
+                self.start = self.cur_char;
+
                 if c == '\n' {
                     self.linenum += 1;
+                    return Ok(NewLine);
                 }
 
-                self.start = self.cur_char;
-                self.next_token()
+                self.scan_token()
             }
 
             // Single character lexemes
@@ -83,6 +96,13 @@ impl Scanner {
             ':' => Ok(Colon),
 
             // Double character lexemes
+            '/' => {
+                if self.match_next_char('/') {
+                    Ok(SlashSlash)
+                } else {
+                    Ok(Slash)
+                }
+            }
             '!' => {
                 let token = if self.match_next_char('=') {
                     BangEqual
@@ -117,15 +137,11 @@ impl Scanner {
             }
 
             // Comments
-            '/' => {
-                if self.match_next_char('/') {
-                    while self.peek_char() != '\n' && !self.is_at_end() {
-                        self.consume_char();
-                    }
-                    self.next_token()
-                } else {
-                    Ok(Slash)
+            '#' => {
+                while self.peek_char() != '\n' && !self.is_at_end() {
+                    self.consume_char();
                 }
+                self.scan_token()
             }
 
             // Strings
@@ -143,16 +159,18 @@ impl Scanner {
                 }
                 // Default, if no valid lexeme found
                 else {
-                    Err(Error::UnexpectedToken(
+                    Err(Error::new(
+                        ErrorType::UnexpectedToken,
                         format!("Unexpected character '{}'!", c).to_string(),
+                        self.linenum,
                     ))
                 }
             }
         }?; // < look here
 
-        self.token_len = ret_token.len();
+        self.token_len = ret_token_type.to_string().len();
         self.start = self.cur_char;
-        Ok(ret_token)
+        Ok(ret_token_type)
     }
 
     pub fn get_line(&self, linenum: usize) -> Option<&str> {
@@ -209,7 +227,7 @@ impl Scanner {
         self.source.chars().nth(self.cur_char + 1).unwrap()
     }
 
-    fn manage_strings(&mut self) -> Result<Token, Error> {
+    fn manage_strings(&mut self) -> Result<TokenType, Error> {
         while self.peek_char() != '"' && !self.is_at_end() {
             if self.peek_char() == '\n' {
                 self.linenum += 1;
@@ -218,7 +236,11 @@ impl Scanner {
         }
 
         if self.is_at_end() {
-            return Err(Error::UnterminatedString("'\"' expected".to_string()));
+            return Err(Error::new(
+                ErrorType::UnterminatedString,
+                "'\"' expected".to_string(),
+                self.linenum,
+            ));
         }
 
         // Also pass the closing "
@@ -233,7 +255,7 @@ impl Scanner {
         Ok(String(string_text))
     }
 
-    fn manage_numbers(&mut self) -> Result<Token, Error> {
+    fn manage_numbers(&mut self) -> Result<TokenType, Error> {
         while self.is_digit(self.peek_char()) {
             self.consume_char();
         }
@@ -252,7 +274,7 @@ impl Scanner {
         Ok(Number(number))
     }
 
-    fn manage_identifiers(&mut self) -> Result<Token, Error> {
+    fn manage_identifiers(&mut self) -> Result<TokenType, Error> {
         while self.is_alpha_numeric(self.peek_char()) {
             self.consume_char();
         }

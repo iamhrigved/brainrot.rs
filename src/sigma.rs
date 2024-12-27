@@ -37,8 +37,12 @@ impl Sigma {
             line = line.trim().to_string();
 
             if line == ":q" {
-                println!("\nBye!");
+                println!("Bye!");
                 break;
+            }
+            if line == "clear" {
+                println!("\x1B[2J\x1B[1;1H"); // clear the screen and position the cursor at 1, 1
+                continue;
             }
 
             println!(""); // extra line before next prompt appears

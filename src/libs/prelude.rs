@@ -38,14 +38,16 @@ impl Prelude {
 
     #[rustfmt::skip]
     fn match_function(&self, fun_name: &String) -> Option<NativeFun> {
-        match &**fun_name {
-            "type" => Some(NativeFun::new("type".to_string(), (1, None), Self::r#type)),
-            "format" => Some(NativeFun::new("format".to_string(), (1, None), Self::format)),
-            "assert" => Some(NativeFun::new("assert".to_string(), (1, Some(1)), Self::assert)),
-            "assert_eq" => Some(NativeFun::new("assert_eq".to_string(), (2, Some(2)), Self::assert_eq)),
+        let fun = match &**fun_name {
+            "type" =>NativeFun::new("type".to_string(), (1, None), Self::r#type),
+            "format" => NativeFun::new("format".to_string(), (1, None), Self::format),
+            "assert" => NativeFun::new("assert".to_string(), (1, Some(1)), Self::assert),
+            "assert_eq" => NativeFun::new("assert_eq".to_string(), (2, Some(2)), Self::assert_eq),
 
-            _ => None,
-        }
+            _ => return None,
+        };
+
+        Some(fun)
     }
 
     fn load_fun(&mut self, sigma_fun: NativeFun) -> Value {

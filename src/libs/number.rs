@@ -36,17 +36,19 @@ impl NumberLib {
 
     #[rustfmt::skip]
     fn match_function(&self, fun_name: &String) -> Option<NativeFun> {
-        match &**fun_name {
-            "round" => Some(NativeFun::new("round".to_string(), (0, Some(0)), Self::round)),
-            "floor" => Some(NativeFun::new("floor".to_string(), (0, Some(0)), Self::floor)),
-            "ceil" => Some(NativeFun::new("ceil".to_string(), (0, Some(0)), Self::ceil)),
-            "trunc" => Some(NativeFun::new("trunc".to_string(), (0, Some(0)), Self::trunc)),
-            "abs" => Some(NativeFun::new("abs".to_string(), (0, Some(0)), Self::abs)),
-            "sqrt" => Some(NativeFun::new("sqrt".to_string(), (0, Some(0)), Self::sqrt)),
-            "pow" => Some(NativeFun::new("pow".to_string(), (1, Some(1)), Self::pow)),
+        let fun = match &**fun_name {
+            "round" => NativeFun::new("round".to_string(), (0, Some(0)), Self::round),
+            "floor" => NativeFun::new("floor".to_string(), (0, Some(0)), Self::floor),
+            "ceil" => NativeFun::new("ceil".to_string(), (0, Some(0)), Self::ceil),
+            "trunc" => NativeFun::new("trunc".to_string(), (0, Some(0)), Self::trunc),
+            "abs" => NativeFun::new("abs".to_string(), (0, Some(0)), Self::abs),
+            "sqrt" => NativeFun::new("sqrt".to_string(), (0, Some(0)), Self::sqrt),
+            "pow" => NativeFun::new("pow".to_string(), (1, Some(1)), Self::pow),
 
-            _ => None,
-        }
+            _ => return None,
+        }; 
+
+        Some(fun)
     }
 
     fn load_fun(&mut self, sigma_fun: NativeFun) -> Value {
@@ -115,18 +117,18 @@ impl NumberLib {
             )),
         }
     }
-    fn trunc_to(args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
-        match (&args_val[0], &args_val[1]) {
-            (Value::Number(num), Value::Number(power)) => Ok(Value::Number(num.powf(*power))),
-
-            (_, val) => Err(Error::new(
-                ErrorKind::Exception(TypeError),
-                format!(
-                    "Native function `{}` axpects the argument to be of type Number. Found {:?}.",
-                    err_token, val
-                ),
-                err_token,
-            )),
-        }
-    }
+    //fn trunc_to(args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
+    //    match (&args_val[0], &args_val[1]) {
+    //        (Value::Number(num), Value::Number(power)) => Ok(Value::Number(num.powf(*power))),
+    //
+    //        (_, val) => Err(Error::new(
+    //            ErrorKind::Exception(TypeError),
+    //            format!(
+    //                "Native function `{}` axpects the argument to be of type Number. Found {:?}.",
+    //                err_token, val
+    //            ),
+    //            err_token,
+    //        )),
+    //    }
+    //}
 }

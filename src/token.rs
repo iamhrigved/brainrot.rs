@@ -2,7 +2,6 @@
 pub struct Token {
     pub token_type: TokenType,
     pub pos: (usize, usize),
-    pub lexeme: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -63,7 +62,6 @@ pub enum TokenType {
     Class,
     Meth,
     Super,
-    //Me,
     Let,
     As,
     While,
@@ -71,7 +69,7 @@ pub enum TokenType {
     Break,
 
     // Exceptions
-    Exception,
+    Error,
     TypeError,
     NameError,
     IndexError,
@@ -81,13 +79,28 @@ pub enum TokenType {
     // variable arguments
     Varargs,
 
+    // Brainrot
+    Lit,      // let
+    Cap,      // false
+    NoCap,    // true
+    RN,       // semicolon
+    Spit,     // print
+    FkAround, // try
+    FindOut,  // catch
+    Yeet,     // return
+    AightBet, // if
+    NahDawg,  // else
+    FrTho,    // else if
+    Be,       // equals
+    Is,       // ==
+
     Eof,
 }
 
 impl std::fmt::Display for TokenType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let lexeme = match self {
-            // Single-character tokens.
+            // Operators
             Self::LeftParen => "(",
             Self::RightParen => ")",
             Self::LeftBracket => "[",
@@ -109,7 +122,7 @@ impl std::fmt::Display for TokenType {
             Self::Question => "?",
             Self::Colon => ":",
 
-            // One or two character tokens.
+            // Comparison
             Self::Bang => "!",
             Self::BangEqual => "!=",
             Self::Equal => "=",
@@ -121,9 +134,7 @@ impl std::fmt::Display for TokenType {
 
             // Literals.
             Self::Identifier(ident) => &ident.to_string(),
-            Self::String(str) => &format!("\"{}\"", str), // String lexeme will
-            // include the surrounding
-            // '"'
+            Self::String(str) => &format!("\"{}\"", str), // String with '"'
             Self::Number(num) => &num.to_string(),
             Self::Boolean(bool) => &bool.to_string(),
             Self::TypeLiteral(type_name) => type_name,
@@ -142,10 +153,9 @@ impl std::fmt::Display for TokenType {
             Self::Throw => "throw",
             Self::Print => "print",
             Self::Return => "return",
-            Self::Class => "type",
+            Self::Class => "class",
             Self::Meth => "meth",
             Self::Super => "super",
-            //Self::Me => "this",
             Self::Let => "let",
             Self::As => "as",
             Self::While => "while",
@@ -153,7 +163,7 @@ impl std::fmt::Display for TokenType {
             Self::Break => "break",
 
             // Exceptions
-            Self::Exception => "Exception",
+            Self::Error => "Error",
             Self::TypeError => "TypeError",
             Self::NameError => "NameError",
             Self::IndexError => "IndexError",
@@ -161,6 +171,21 @@ impl std::fmt::Display for TokenType {
             Self::PropertyError => "PropertyError",
 
             Self::Varargs => "...",
+
+            // Brainrot
+            Self::Lit => "lit",
+            Self::Cap => "cap",
+            Self::NoCap => "nocap",
+            Self::RN => "rn",
+            Self::Spit => "spit",
+            Self::FkAround => "fuk around",
+            Self::FindOut => "find out",
+            Self::Yeet => "yeet",
+            Self::AightBet => "aight bet",
+            Self::NahDawg => "nah dawg",
+            Self::FrTho => "fr tho?",
+            Self::Be => "be",
+            Self::Is => "is",
 
             Self::Eof => "%",
         };
@@ -176,10 +201,14 @@ impl std::fmt::Display for Token {
 
 impl Token {
     pub fn new(token_type: TokenType, pos: (usize, usize)) -> Self {
-        Self {
-            lexeme: token_type.to_string(),
-            token_type,
-            pos,
-        }
+        Self { token_type, pos }
+    }
+    pub fn get_second_half(identifier: &str) -> Option<&str> {
+        let first_half = ["fuk", "find", "aight", "nah", "fr"];
+        let second_half = ["around", "out", "bet", "dawg", "tho?"];
+
+        let pos = first_half.iter().position(|first| *first == identifier)?;
+
+        second_half.get(pos).copied()
     }
 }

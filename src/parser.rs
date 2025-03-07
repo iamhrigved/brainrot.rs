@@ -339,7 +339,7 @@ impl<'a> Parser<'a> {
         match self.cur_token.token_type {
             Try | FkAround => self.try_statement(),
             If | AightBet => self.if_statement(),
-            Print => self.print_statement(),
+            Print | Spit => self.print_statement(),
             For => self.for_statement(),
             While => self.while_statemtent(),
             Throw => self.throw_statement(),
@@ -520,6 +520,7 @@ impl<'a> Parser<'a> {
 
     fn for_in_statement(&mut self, for_token: Token) -> Result<Stmt> {
         let cur_token = self.consume_token();
+        println!("cur_token: {}", cur_token);
         let var_name = match cur_token.token_type {
             Identifier(name) => name,
 
@@ -531,6 +532,17 @@ impl<'a> Parser<'a> {
                 ));
             }
         };
+
+        if self.match_next(&[In]).is_none() {
+            return Err(Error::new(
+                ErrorKind::Fatal(SyntaxError),
+                format!(
+                    "Expected `in` after variable name. Found `{}`.",
+                    self.cur_token
+                ),
+                &self.cur_token,
+            ));
+        }
 
         let list = self.expression()?;
 
@@ -1005,8 +1017,8 @@ impl<'a> Parser<'a> {
     fn synchronize_parser(&mut self) {
         while self.cur_token.token_type != Eof {
             match self.cur_token.token_type {
-                Try | FkAround | Catch | FindOut | If | AightBet | Print | For | While | Return
-                | Yeet | Continue | Break => return,
+                Try | FkAround | Catch | FindOut | If | AightBet | Print | Spit | For | While
+                | Return | Yeet | Continue | Break => return,
                 Semicolon | RN => {
                     self.consume_token();
                     return;

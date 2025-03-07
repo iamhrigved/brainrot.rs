@@ -72,7 +72,7 @@ impl Sigma {
         for stmt in &stmts {
             if let Err(err) = self.interpreter.interpret_statement(stmt) {
                 err.display(source.lines().nth(err.pos.0 - 1).unwrap());
-                //break;
+                break;
             }
         }
     }

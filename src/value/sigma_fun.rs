@@ -1,4 +1,5 @@
 use super::*;
+use crate::environment::Environment;
 use crate::error::Error;
 use crate::interpreter::{ControlFlow, Interpreter};
 use crate::parser::{Expr, Stmt};
@@ -8,29 +9,11 @@ type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone)]
 pub struct SigmaFun {
     pub name: Option<String>,
-    pub env_id: Option<u64>,
+    captured_environment: Option<Rc<RefCell<Environment>>>,
     params: Vec<String>,
     default_params: Vec<(String, Expr)>,
     fun_body: Option<Stmt>,
     pub arity: (usize, Option<usize>), // minimum and maximum arity
-}
-
-impl PartialEq for SigmaFun {
-    fn eq(&self, other: &Self) -> bool {
-        if self.name != other.name {
-            return false;
-        }
-
-        if self.env_id != other.env_id {
-            return false;
-        }
-
-        if self.arity != other.arity {
-            return false;
-        }
-
-        true
-    }
 }
 
 impl std::fmt::Display for SigmaFun {
@@ -65,7 +48,10 @@ impl std::fmt::Display for SigmaFun {
 }
 
 impl SigmaFun {
-    pub fn new_user_defined(declaration: Box<Stmt>, env_id: u64) -> Self {
+    pub fn new_user_defined(
+        declaration: Box<Stmt>,
+        captured_environment: Rc<RefCell<Environment>>,
+    ) -> Self {
         let (
             fun_name,
             mut minimum_arity,
@@ -96,7 +82,7 @@ impl SigmaFun {
         }
         Self {
             name: fun_name,
-            env_id: Some(env_id),
+            captured_environment: Some(captured_environment),
             params,
             default_params,
             fun_body: Some(fun_body),
@@ -133,7 +119,7 @@ impl SigmaFun {
         }
         Self {
             name: name_opt,
-            env_id: None,
+            captured_environment: None,
             params,
             default_params,
             fun_body: Some(fun_body),
@@ -145,11 +131,23 @@ impl SigmaFun {
         self.name = Some(name)
     }
 
-    pub fn call(&mut self, args_val: Vec<Value>, interpreter: &mut Interpreter) -> Result<Value> {
-        let old_id = interpreter.environments.set_cur_id(self.env_id.unwrap());
+    pub fn update_environment(&mut self, environment: Rc<RefCell<Environment>>) {
+        self.captured_environment = Some(environment)
+    }
+
+    pub fn call(&mut self, args_val: Vec<Value>) -> Result<Value> {
+        let old_env_opt = self.captured_environment.as_ref().map(Rc::clone);
+
+        let mut interpreter = match &old_env_opt {
+            Some(env_rc) => Interpreter::from(Rc::clone(env_rc)),
+
+            None => Interpreter::new(),
+        };
 
         // create a new local environment for the function body inside the captured environment
-        interpreter.environments.push_fun();
+        let old_env = Rc::clone(&interpreter.environment);
+
+        interpreter.environment = Environment::new_fun(Rc::clone(&old_env));
 
         let mut cur_arg_index = 0;
 
@@ -157,7 +155,8 @@ impl SigmaFun {
         for param in self.params.iter().take(self.arity.0) {
             // define the var
             interpreter
-                .environments
+                .environment
+                .borrow_mut()
                 .define_var(param.clone(), Some(args_val[cur_arg_index].clone()));
 
             cur_arg_index += 1;
@@ -175,7 +174,8 @@ impl SigmaFun {
             }
 
             interpreter
-                .environments
+                .environment
+                .borrow_mut()
                 .define_var(param.clone(), Some(final_val));
 
             cur_arg_index += 1;
@@ -187,7 +187,7 @@ impl SigmaFun {
 
             let val_vec = args_val[self.arity.0..].to_vec();
 
-            interpreter.environments.define_var(
+            interpreter.environment.borrow_mut().define_var(
                 name.clone(),
                 Some(Value::List(Rc::new(RefCell::new(val_vec)))),
             );
@@ -202,8 +202,7 @@ impl SigmaFun {
             fun_ret = val;
         }
 
-        interpreter.environments.pop_env();
-        interpreter.environments.set_cur_id(old_id);
+        self.captured_environment = old_env_opt;
 
         Ok(fun_ret)
     }

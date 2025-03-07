@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::string::String;
 
-use crate::environment::EnvironmentStack;
+use crate::environment::Environment;
 use crate::error::{Error, ErrorKind, ExceptionKind, FatalKind::*};
-use crate::libs::{number::NumberLib, prelude::Prelude, Library};
+use crate::libs::Library;
 use crate::parser::{Expr, Stmt};
 use crate::token::{Token, TokenType, TokenType::*};
 use crate::value::native_fun::NativeFun;
@@ -24,21 +24,23 @@ pub enum ControlFlow {
 
 pub struct Interpreter {
     // pub for sigma_fun
-    pub environments: EnvironmentStack,
+    pub environment: Rc<RefCell<Environment>>,
 
     native_libs: Vec<Library>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
-        let prelude = Library::Prelude(Prelude::new());
-        let number = Library::Number(NumberLib::new());
-
-        let native_libs = vec![prelude, number];
-
         Self {
-            environments: EnvironmentStack::new(),
-            native_libs,
+            environment: Environment::new(),
+            native_libs: Library::init_libs(),
+        }
+    }
+
+    pub fn from(environment: Rc<RefCell<Environment>>) -> Self {
+        Self {
+            environment: Environment::new_from(environment),
+            native_libs: Library::init_libs(),
         }
     }
 
@@ -123,7 +125,8 @@ impl Interpreter {
         let class = SigmaClass::new(name.to_owned(), properties);
         let class_rc = Rc::new(RefCell::new(class));
 
-        self.environments
+        self.environment
+            .borrow_mut()
             .define_var(name.to_owned(), Some(Value::Class(class_rc)));
 
         Ok(None)
@@ -135,12 +138,11 @@ impl Interpreter {
             _ => panic!("ERROR"), // not possible
         };
 
-        let fun = SigmaFun::new_user_defined(
-            Box::new(declaration.clone()),
-            self.environments.get_cur_id(),
-        );
+        let fun =
+            SigmaFun::new_user_defined(Box::new(declaration.clone()), Rc::clone(&self.environment));
 
-        self.environments
+        self.environment
+            .borrow_mut()
             .define_var(name, Some(Value::Function(Rc::new(RefCell::new(fun)))));
 
         Ok(None)
@@ -169,9 +171,11 @@ impl Interpreter {
             _ => (),
         }
 
-        self.environments.push_block();
+        self.environment = Environment::new_block(Rc::clone(&self.environment));
 
-        self.environments.define_var(name.to_owned(), val_opt);
+        self.environment
+            .borrow_mut()
+            .define_var(name.to_owned(), val_opt);
 
         Ok(None)
     }
@@ -196,18 +200,21 @@ impl Interpreter {
                 | (TokenType::IndexError, ErrorKind::Exception(ExceptionKind::IndexError))
                 | (TokenType::ValueError, ErrorKind::Exception(ExceptionKind::ValueError))
                 | (TokenType::PropertyError, ErrorKind::Exception(ExceptionKind::PropertyError)) => {
-                    self.environments.push_block();
+                    let old_env = Rc::clone(&self.environment);
+
+                    self.environment = Environment::new_block(Rc::clone(&old_env));
 
                     // define variable if possible
                     if let Some(var_name) = var_opt {
-                        self.environments
+                        self.environment
+                            .borrow_mut()
                             .define_var(var_name.to_string(), Some(Value::Exception(err.print())));
                     }
 
                     let result = self.interpret_statement(stmt);
 
                     // restore the old environment
-                    self.environments.pop_env();
+                    self.environment = old_env;
 
                     return result;
                 }
@@ -241,11 +248,12 @@ impl Interpreter {
         increment_opt: Option<&Expr>,
         body: &Stmt,
     ) -> Result<Option<ControlFlow>> {
-        self.environments.push_loop();
+        let old_env = Rc::clone(&self.environment);
+        self.environment = Environment::new_loop(Rc::clone(&old_env));
 
         if let Some(initializer) = initializer_opt {
             if let Some(cf) = self.interpret_statement(initializer)? {
-                self.environments.pop_env();
+                self.environment = old_env;
 
                 return Ok(Some(cf));
             }
@@ -270,7 +278,7 @@ impl Interpreter {
             }
         }
 
-        self.environments.pop_env();
+        self.environment = old_env;
         Ok(None)
     }
     fn interpret_for_in_stmt(
@@ -292,11 +300,13 @@ impl Interpreter {
             }
         };
 
-        self.environments.push_loop();
+        let old_env = Rc::clone(&self.environment);
+        self.environment = Environment::new_loop(Rc::clone(&old_env));
 
         for item in list {
             // since the variable name is the same, we can redefine it in the same environment
-            self.environments
+            self.environment
+                .borrow_mut()
                 .define_var(var_name.to_owned(), Some(item));
 
             match self.interpret_statement(body)? {
@@ -308,14 +318,15 @@ impl Interpreter {
                 _ => (),
             }
         }
-        self.environments.pop_env();
+        self.environment = old_env;
 
         Ok(None)
     }
     fn interpret_while_stmt(&mut self, cond: &Expr, body: &Stmt) -> Result<Option<ControlFlow>> {
         let mut cond_val = self.interpret_expression(cond)?;
 
-        self.environments.push_loop();
+        let old_env = Rc::clone(&self.environment);
+        self.environment = Environment::new_loop(Rc::clone(&old_env));
 
         while self.is_truthy(&cond_val) {
             match self.interpret_statement(body)? {
@@ -327,22 +338,23 @@ impl Interpreter {
             cond_val = self.interpret_expression(cond)?;
         }
 
-        self.environments.pop_env();
+        self.environment = old_env;
 
         Ok(None)
     }
     fn interpret_block_stmt(&mut self, stmts: &Vec<Stmt>) -> Result<Option<ControlFlow>> {
-        self.environments.push_block();
+        let old_env = Rc::clone(&self.environment);
+        self.environment = Environment::new_block(Rc::clone(&old_env));
 
         for stmt in stmts {
             if let Some(cf) = self.interpret_statement(stmt)? {
-                self.environments.pop_env();
+                self.environment = old_env;
                 return Ok(Some(cf)); // in case of break, continue or return:
                                      // we automatically stop interpreting as we return!
             }
         }
 
-        self.environments.pop_env();
+        self.environment = old_env;
 
         Ok(None)
     }
@@ -378,51 +390,7 @@ impl Interpreter {
     fn interpret_return_stmt(&mut self, token: &Token, expr: &Expr) -> Result<Option<ControlFlow>> {
         let return_val = self.interpret_expression(expr)?;
 
-        let mut funs_that_return = Vec::new();
-        let mut funs_ids_that_drop = Vec::new();
-
-        match &return_val {
-            Value::Function(fun_rc) => funs_that_return.push(Rc::clone(fun_rc)),
-
-            Value::List(list_rc) => {
-                let list_borrow = list_rc.borrow();
-
-                let fun_vals = list_borrow
-                    .iter()
-                    .filter(|val| matches!(val, Value::Function(_)));
-
-                for fun in fun_vals {
-                    match &fun {
-                        Value::Function(fun_rc) => funs_that_return.push(Rc::clone(fun_rc)),
-
-                        _ => unreachable!(),
-                    }
-                }
-            }
-
-            _ => (),
-        }
-
-        for fun_opt in self.environments.last().variables.values() {
-            let fun = match fun_opt {
-                Some(Value::Function(fun_rc)) => fun_rc,
-
-                _ => continue,
-            };
-
-            if funs_that_return.contains(fun) {
-                continue;
-            }
-
-            funs_ids_that_drop.push(fun.borrow().env_id.unwrap());
-        }
-
-        self.environments.mark_envs_uncaptured(funs_ids_that_drop);
-        if !funs_that_return.is_empty() {
-            self.environments.mark_cur_env_captured();
-        }
-
-        if !self.environments.in_fun() {
+        if !self.environment.borrow().in_fun {
             Err(Error::new(
                 ErrorKind::Fatal(UnexpectedToken),
                 "Return outside function!".to_string(),
@@ -433,7 +401,7 @@ impl Interpreter {
         }
     }
     fn interpret_continue_stmt(&mut self, token: &Token) -> Result<Option<ControlFlow>> {
-        if !self.environments.in_loop() {
+        if !self.environment.borrow().in_loop {
             Err(Error::new(
                 ErrorKind::Fatal(UnexpectedToken),
                 "Continue outside loop!".to_string(),
@@ -444,7 +412,7 @@ impl Interpreter {
         }
     }
     fn interpret_break_stmt(&mut self, token: &Token) -> Result<Option<ControlFlow>> {
-        if !self.environments.in_loop() {
+        if !self.environment.borrow().in_loop {
             Err(Error::new(
                 ErrorKind::Fatal(UnexpectedToken),
                 "Break outside loop!".to_string(),
@@ -516,7 +484,7 @@ impl Interpreter {
 
                     _ => panic!("ERROR"),
                 };
-                self.environments.assign_var(
+                self.environment.borrow_mut().assign_var(
                     &var_name,
                     indices_opt,
                     Value::Number(final_num),
@@ -531,7 +499,7 @@ impl Interpreter {
 
                     _ => panic!("ERROR"),
                 };
-                self.environments.assign_var(
+                self.environment.borrow_mut().assign_var(
                     &var_name,
                     indices_opt,
                     Value::Number(final_num),
@@ -781,19 +749,14 @@ impl Interpreter {
         };
 
         // error handling will be done by the `environment.get_var()` function
-        let value_result = self.environments.get_var(var_name, var);
+        let value_result = self.environment.borrow().get_var(var_name, var);
 
         match value_result {
             // if a value is found
             Ok(val) => Ok(val),
 
             // if no entry is found, get the native function with the same name
-            Err(val_not_found_err) => {
-                let res = self.get_native_fun(None, var_name).ok_or(val_not_found_err);
-                // BUG: ERROR PRINTING TWO TIMES
-                // dbg!(&res);
-                res
-            }
+            Err(val_not_found_err) => self.get_native_fun(None, var_name).ok_or(val_not_found_err),
         }
     }
     fn interpret_index_expr(
@@ -858,8 +821,12 @@ impl Interpreter {
             }
         }
 
-        self.environments
-            .assign_var(&var_name, indices_opt, new_val.clone(), &err_tokens)?;
+        self.environment.borrow_mut().assign_var(
+            &var_name,
+            indices_opt,
+            new_val.clone(),
+            &err_tokens,
+        )?;
 
         Ok(new_val)
     }
@@ -902,7 +869,7 @@ impl Interpreter {
         }
 
         // call the function
-        fun.call(args_val, self)
+        fun.call(args_val)
     }
     fn interpret_native_fun_call_expr(
         &mut self,
@@ -931,7 +898,7 @@ impl Interpreter {
         err_token: &Token,
     ) -> Result<Value> {
         let mut class = class_rc.borrow_mut();
-        let instance_rc = class.new_instance(None, &mut self.environments);
+        let instance_rc = class.new_instance(None);
 
         let fun_rc = match instance_rc.borrow().get_property(&"__new".to_string()) {
             Some(Value::Function(fun_rc)) => fun_rc,
@@ -956,7 +923,7 @@ impl Interpreter {
         }
 
         // call the __new function
-        match fun.call(args_val, self)? {
+        match fun.call(args_val)? {
             Value::Nil => Ok(Value::Instance(instance_rc)),
 
             // the function should return Nil
@@ -979,7 +946,7 @@ impl Interpreter {
             _ => panic!("ERROR"),
         };
 
-        let fun = SigmaFun::new_user_defined(Box::new(fun_decl), self.environments.get_cur_id());
+        let fun = SigmaFun::new_user_defined(Box::new(fun_decl), Rc::clone(&self.environment));
 
         Ok(Value::Function(Rc::new(RefCell::new(fun))))
     }
@@ -1214,6 +1181,10 @@ impl Interpreter {
         let lib = self.native_libs.iter_mut().find(|lib| match lib {
             Library::Number(_) if matches!(target, Some(Value::Number(_))) => true,
 
+            Library::String(_) if matches!(target, Some(Value::String(_))) => true,
+
+            Library::List(_) if matches!(target, Some(Value::List(_))) => true,
+
             Library::Prelude(_) if target.is_none() => true,
 
             _ => false,
@@ -1221,6 +1192,10 @@ impl Interpreter {
 
         let val_opt = match lib {
             Library::Number(num_lib) => num_lib.get_function(property_name),
+
+            Library::String(string_lib) => string_lib.get_function(property_name),
+
+            Library::List(list_lib) => list_lib.get_function(property_name),
 
             Library::Prelude(prlelude_lib) => prlelude_lib.get_function(property_name),
         };

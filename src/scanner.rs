@@ -78,6 +78,7 @@ impl<'a> Scanner<'a> {
         insert(TokenType::Cap);
         insert(TokenType::NoCap);
         insert(TokenType::RN);
+        insert(TokenType::Spit);
         insert(TokenType::FkAround);
         insert(TokenType::FindOut);
         insert(TokenType::Yeet);
@@ -351,7 +352,12 @@ impl<'a> Scanner<'a> {
         // Also pass the closing "
         self.consume_char();
 
-        let string_text = self.source[self.start + 1..self.cur_char - 1].to_string();
+        let mut string_text = self.source[self.start + 1..self.cur_char - 1].to_string();
+
+        // special characters
+        string_text = string_text.replace("\\n", "\n");
+        string_text = string_text.replace("\\t", "\t");
+        string_text = string_text.replace("\\\\", "\\");
 
         Ok(String(string_text))
     }

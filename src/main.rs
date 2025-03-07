@@ -6,7 +6,6 @@ mod error;
 mod interpreter;
 mod libs;
 mod parser;
-mod resolver;
 mod scanner;
 mod sigma;
 mod token;

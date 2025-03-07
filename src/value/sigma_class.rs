@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::{sigma_instance::SigmaInstance, Value};
-use crate::environment::EnvironmentStack;
 use std::collections::HashMap;
 
 pub struct SigmaClass {
@@ -20,17 +19,11 @@ impl SigmaClass {
     pub fn new(name: String, properties: HashMap<String, Value>) -> Self {
         Self { name, properties }
     }
-    pub fn new_instance(
-        &mut self,
-        name: Option<String>,
-        env_stack: &mut EnvironmentStack,
-    ) -> Rc<RefCell<SigmaInstance>> {
+    pub fn new_instance(&mut self, name: Option<String>) -> Rc<RefCell<SigmaInstance>> {
         let instance = SigmaInstance::new(name, self.clone());
         let instance_rc = Rc::new(RefCell::new(instance));
 
-        instance_rc
-            .borrow()
-            .define_me(Rc::clone(&instance_rc), env_stack);
+        instance_rc.borrow().define_me(Rc::clone(&instance_rc));
 
         instance_rc
     }

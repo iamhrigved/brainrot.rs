@@ -1,0 +1,33 @@
+# class Person {
+#     let a;
+#     let b;
+# 
+#     meth __new(a = 0, b = 0) {
+#         me.a = a;
+#         me.b = b;
+# 
+#         print "me.a: " + me.a;
+#         print "me.b: " + me.b;
+#     }
+#     
+#     meth add() {
+#         return me.a + me.b;
+#     }
+# }
+# 
+# let ramesh = Person(17, 25);
+# 
+# print ramesh.add();
+
+let count = 0;
+
+fun increment_count() {
+    print ++count;
+}
+
+increment_count();
+increment_count();
+increment_count();
+increment_count();
+
+print count;

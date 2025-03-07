@@ -1,29 +1,35 @@
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub token_type: TokenType,
-    pub linenum: usize,
+    pub pos: (usize, usize),
     pub lexeme: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
-    // Single-character tokens.
+    // Arithmetic and other operators
     LeftParen,
     RightParen,
+    LeftBracket,
+    RightBracket,
     LeftBrace,
     RightBrace,
     Comma,
     Dot,
     Minus,
+    MinusMinus,
     Plus,
-    Semicolon,
+    PlusPlus,
     Slash,
     SlashSlash,
     Star,
+    StarStar,
+    Modulus,
     Question,
     Colon,
+    Semicolon,
 
-    // One or two character tokens.
+    // Comparison operators
     Bang,
     BangEqual,
     Equal,
@@ -38,25 +44,44 @@ pub enum TokenType {
     String(String),
     Number(f64),
     Boolean(bool),
+    TypeLiteral(String),
 
     // Keywords.
     And,
-    Class,
     Else,
     Fun,
     For,
+    In,
     If,
     Nil,
     Or,
+    Try,
+    Catch,
+    Throw,
     Print,
     Return,
+    Class,
+    Meth,
     Super,
-    This,
+    //Me,
     Let,
+    As,
     While,
+    Continue,
+    Break,
+
+    // Exceptions
+    Exception,
+    TypeError,
+    NameError,
+    IndexError,
+    ValueError,
+    PropertyError,
+
+    // variable arguments
+    Varargs,
 
     Eof,
-    NewLine,
 }
 
 impl std::fmt::Display for TokenType {
@@ -65,16 +90,22 @@ impl std::fmt::Display for TokenType {
             // Single-character tokens.
             Self::LeftParen => "(",
             Self::RightParen => ")",
-            Self::LeftBrace => "{{",
-            Self::RightBrace => "}}",
+            Self::LeftBracket => "[",
+            Self::RightBracket => "]",
+            Self::LeftBrace => "{",
+            Self::RightBrace => "}",
             Self::Comma => ",",
             Self::Dot => ".",
             Self::Minus => "-",
+            Self::MinusMinus => "--",
             Self::Plus => "+",
+            Self::PlusPlus => "++",
             Self::Semicolon => ";",
             Self::Slash => "/",
             Self::SlashSlash => "//",
             Self::Star => "*",
+            Self::StarStar => "**",
+            Self::Modulus => "%",
             Self::Question => "?",
             Self::Colon => ":",
 
@@ -89,32 +120,49 @@ impl std::fmt::Display for TokenType {
             Self::LessEqual => "<=",
 
             // Literals.
-            Self::Identifier(ident) => ident,
+            Self::Identifier(ident) => &ident.to_string(),
             Self::String(str) => &format!("\"{}\"", str), // String lexeme will
             // include the surrounding
             // '"'
             Self::Number(num) => &num.to_string(),
             Self::Boolean(bool) => &bool.to_string(),
+            Self::TypeLiteral(type_name) => type_name,
 
             // Keywords.
             Self::And => "and",
-            Self::Class => "class",
             Self::Else => "else",
             Self::Fun => "fun",
             Self::For => "for",
+            Self::In => "in",
             Self::If => "if",
             Self::Nil => "nil",
             Self::Or => "or",
+            Self::Try => "try",
+            Self::Catch => "catch",
+            Self::Throw => "throw",
             Self::Print => "print",
             Self::Return => "return",
+            Self::Class => "type",
+            Self::Meth => "meth",
             Self::Super => "super",
-            Self::This => "this",
+            //Self::Me => "this",
             Self::Let => "let",
+            Self::As => "as",
             Self::While => "while",
+            Self::Continue => "continue",
+            Self::Break => "break",
 
-            // Eof and NewLine
-            Self::Eof => "EOF",
-            Self::NewLine => "\\n",
+            // Exceptions
+            Self::Exception => "Exception",
+            Self::TypeError => "TypeError",
+            Self::NameError => "NameError",
+            Self::IndexError => "IndexError",
+            Self::ValueError => "ValueError",
+            Self::PropertyError => "PropertyError",
+
+            Self::Varargs => "...",
+
+            Self::Eof => "%",
         };
         write!(f, "{}", lexeme)
     }
@@ -126,16 +174,12 @@ impl std::fmt::Display for Token {
     }
 }
 
-#[allow(clippy::len_without_is_empty)]
 impl Token {
-    pub fn new(token_type: TokenType, linenum: usize) -> Self {
+    pub fn new(token_type: TokenType, pos: (usize, usize)) -> Self {
         Self {
             lexeme: token_type.to_string(),
             token_type,
-            linenum,
+            pos,
         }
-    }
-    pub fn len(&self) -> usize {
-        self.lexeme.len()
     }
 }

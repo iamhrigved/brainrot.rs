@@ -1,13 +1,16 @@
 use sigma::Sigma;
 use std::env;
 
-pub mod environment;
-pub mod error;
-pub mod interpreter;
-pub mod parser;
-pub mod scanner;
-pub mod sigma;
-pub mod token;
+mod environment;
+mod error;
+mod interpreter;
+mod libs;
+mod parser;
+mod resolver;
+mod scanner;
+mod sigma;
+mod token;
+mod value;
 
 use std::string::String;
 

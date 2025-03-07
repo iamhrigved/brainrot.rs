@@ -1,190 +1,165 @@
-/*
-Extended Backus-Naur Form (EBNF) Notation
-
-CHARACTER LEGEND
-      '='   -> definition
-      '|'   -> alteration
-      ','   -> concatenation
-      ';'   -> termination
-    [ ... ] -> optional (none or once)
-    { ... } -> repetition (none or more)
-    ( ... ) -> grouping
-    " ... " -> terminal string
-
-EXAMPLE
-    digit excluding zero = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
-    digit                = "0" | digit excluding zero ;
-
-    natural number       = digit excluding zero , { digit } ;
-    integer              = "0" | [ "-" ], natural number ;
-
-PARSING EXPRESSIONS
-    expression = assignment ;
-    assignment = IDENTIFIER , "=" , assignment | ternary ;
-    ternary    = equality , [ "?" , equality , ":" , equality ] ;
-    equality   = comparison , { ( "!=" | "==" ) , comparison } ;
-    comparison = term , { ( ">" | "<" | ">=" | "<=" ) , term } ;
-    term       = factor , { ( "+" | "-" ) , factor } ;
-    factor     = unary , { ( "*" | "/" ) , unary } ;
-    unary      = ( "-" | "!" ) , unary | primary ;
-    primary    = NUMBER | STRING | "true" | "false" | "nil" | "(" , expression , ")" | IDENTIFIER ;
-
-PARSING STATEMENTS
-    program     = { declaration } , EOF ;
-    declaration = var_decl | statement ;
-    var_decl    = "let" , IDENTIFIER , [ "=" , expression ] ;
-    statement   = expr_stmt | print_stmt ;
-*/
-
-use crate::environment::Environment;
-use crate::error::{Error, ErrorType};
-use crate::interpreter::Interpreter;
-use crate::scanner::Scanner;
-use crate::token::{Token, TokenType, TokenType::*};
 use std::fmt;
 use std::string::String;
 
-#[derive(Debug, Clone)]
-pub enum Value {
-    Number(f64),
-    String(String),
-    Boolean(bool),
-    Nil,
-}
+use crate::error::{Error, ErrorKind, ExceptionKind, FatalKind::*};
+use crate::scanner::Scanner;
+use crate::token::{Token, TokenType, TokenType::*};
+use crate::value::Value;
 
-impl fmt::Display for Value {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let val = match self {
-            Value::Number(num) => num.to_string(),
-            Value::String(str) => str.to_string(),
-            Value::Boolean(bool) => bool.to_string(),
-            Value::Nil => "Nil".to_string(),
-        };
-        write!(f, "{}", val)
-    }
-}
+type Result<T> = std::result::Result<T, Error>;
 
 // ASTNodes
 #[derive(Debug, Clone)]
 pub enum Expr {
+    Increment(Option<Token>, Box<Expr>, Option<Token>),
     Unary(Token, Box<Expr>),
     Binary(Box<Expr>, Token, Box<Expr>),
+    Logical(Box<Expr>, Token, Box<Expr>),
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
+    Call(Box<Expr>, Vec<Expr>, Token), // expr, args and variable token (if available) for error
+    Get(Box<Expr>, Token),             // target, field
+    Set(Box<Expr>, Token, Box<Expr>),  // target, field, expression
+    Closure(Vec<String>, Vec<(String, Expr)>, bool, Box<Stmt>),
     Literal(Value),
     Group(Box<Expr>),
-    Variable(Token),
-    Assign(Token, Box<Expr>),
+    Variable(Token),                    // name
+    Index(Box<Expr>, Box<Expr>, Token), // object, index and RightBracket for error
+    List(Vec<Expr>),
+    Assign(Box<Expr>, Box<Expr>), // variable and expression
 }
 
-impl fmt::Display for Expr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let expr = match self {
-            Expr::Unary(operator, right) => {
-                format!("({} {})", operator, right)
+impl std::fmt::Display for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let print_string = match self {
+            Self::Increment(l_op_opt, expr, r_op_opt) => match (l_op_opt, r_op_opt) {
+                (Some(op), None) | (None, Some(op)) => format!("{}{}", op, expr),
+
+                (_, _) => panic!("ERROR"), // not possible
+            },
+            Self::Unary(op, expr) => format!("{}{}", op, expr),
+            Self::Binary(l, op, r) => format!("{} {} {}", l, op, r),
+            Self::Logical(l, op, r) => format!("{} {} {}", l, op, r),
+            Self::Ternary(cond, then_branch, else_branch) => {
+                format!("{} ? {} : {}", cond, then_branch, else_branch)
             }
-            Expr::Binary(left, operator, right) => {
-                format!("({} {} {})", operator, left, right)
+            Self::Call(expr, args, _) => {
+                let mut args_string = String::new();
+
+                for arg in args {
+                    args_string.push_str(&format!("{}, ", arg))
+                }
+
+                if !args.is_empty() {
+                    args_string.pop();
+                    args_string.pop();
+                }
+
+                format!("{}({})", expr, args_string)
             }
-            Expr::Ternary(cond, if_right, if_wrong) => {
-                format!("({} ? {} : {})", cond, if_right, if_wrong)
+            Self::Get(expr, field) => format!("{}.{}", expr, field),
+            Self::Set(expr, field, value) => format!("{}.{} = {}", expr, field, value),
+            //Self::Me(me_tok) => me_tok.to_string(),
+            Self::Closure(args, default_args, has_varargs, _) => {
+                let mut args_string = String::new();
+
+                for arg in args {
+                    args_string.push_str(&format!("{}, ", arg))
+                }
+
+                if *has_varargs {
+                    args_string.push_str(" ...")
+                }
+
+                for (arg, expr) in default_args {
+                    args_string.push_str(&format!("{} = {}, ", arg, expr))
+                }
+
+                format!("fun ({}) {{ ## Body ## }}", args_string)
             }
-            Expr::Literal(value) => format!("{}", value),
-            Expr::Group(expr) => format!("(group {})", expr),
-            Expr::Variable(name) => format!("Var({})", name),
-            Expr::Assign(name, expr) => format!("Var({}) = {}", name, expr),
+            Self::Literal(val) => format!("{}", val),
+            Self::Group(expr) => format!("({})", expr),
+            Self::Variable(var_token) => format!("{}", var_token), // name
+            Self::Index(expr, index, _) => format!("{}[{}]", expr, index), // object, index and RightBracket for error
+            Self::List(expr_list) => {
+                let mut list_string = String::new();
+
+                for expr in expr_list {
+                    list_string.push_str(&format!("{}, ", expr))
+                }
+
+                if !expr_list.is_empty() {
+                    list_string.pop();
+                    list_string.pop();
+                }
+
+                format!("[{}]", list_string)
+            }
+            Self::Assign(target, expr) => format!("{} = {}", target, expr), // variable and expression
         };
 
-        write!(f, "{}", expr)
-    }
-}
-
-impl Expr {
-    pub fn new_unary(operator: Token, right: Expr) -> Expr {
-        Self::Unary(operator, Box::new(right))
-    }
-    pub fn new_binary(left: Expr, operator: Token, right: Expr) -> Expr {
-        Self::Binary(Box::new(left), operator, Box::new(right))
-    }
-    pub fn new_ternary(cond: Expr, if_right: Expr, if_wrong: Expr) -> Expr {
-        Self::Ternary(Box::new(cond), Box::new(if_right), Box::new(if_wrong))
+        write!(f, "{}", print_string)
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    Expression(Box<Expr>),
-    Print(Vec<Expr>),
-    VarDecl(String, Option<Box<Expr>>),
+    ClassDecl(String, Vec<Stmt>),
+    // optional name, vec<var, expr>, Vec<var, default expr> has_varargs?, body
+    FunDecl(
+        Option<String>,
+        Vec<String>,
+        Vec<(String, Expr)>,
+        bool,
+        Box<Stmt>,
+    ),
+    VarDecl(String, Option<Expr>),
+    // try block, and vector of catch blocks (type of exception to catch, variable, catch block)
+    TryCatch(Box<Stmt>, Vec<(Token, Option<String>, Stmt)>),
+    Throw(Token, Option<Expr>),
+    If(Expr, Box<Stmt>, Option<Box<Stmt>>),
+    Print(Expr),
+    For(Option<Box<Stmt>>, Option<Expr>, Option<Expr>, Box<Stmt>),
+    ForIn(Token, String, Expr, Box<Stmt>), // for, var, expr, stmt
+    While(Expr, Box<Stmt>),
+    Return(Token, Expr),
+    Continue(Token),
+    Break(Token),
+    Block(Vec<Stmt>),
+    Expression(Expr),
     Null,
 }
 
-impl std::fmt::Display for Stmt {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let stmt = match self {
-            Self::Expression(expr) => {
-                let mut expr_string = "Expr(".to_string();
-                expr_string.push_str(&format!("{})", expr));
-                expr_string
-            }
-            Self::Print(expr_vec) => {
-                let mut print_string = "Print(".to_string();
-                expr_vec
-                    .iter()
-                    .for_each(|expr| print_string.push_str(&format!("{expr} ")));
-                print_string.pop();
-                print_string.push(')');
-                print_string
-            }
-            Self::VarDecl(name, expr_opt) => match expr_opt {
-                Some(val) => format!("Let Var({}) = {}", name, val),
-                None => format!("Let Var({}) = Nil", name),
-            },
-            Self::Null => "".to_string(),
-        };
-
-        write!(f, "{}", stmt)
-    }
+pub struct Parser<'a> {
+    scanner: Scanner<'a>, // Scanner instance
+    cur_token: Token,     // The first token which is not yet parsed
 }
 
-pub struct Parser {
-    scanner: Scanner, // Scanner instance
-    cur_token: Token, // The first token which is not yet parsed
-    token_len: usize,
-}
-
-impl Parser {
-    pub fn new(source: String) -> Self {
-        let mut scanner = Scanner::new(source.to_owned());
+impl<'a> Parser<'a> {
+    pub fn new(source: &'a str) -> Self {
+        let mut scanner = Scanner::new(source);
         let cur_token = scanner.next_token();
-        let token_len = cur_token.len();
 
-        Self {
-            scanner,
-            cur_token,
-            token_len,
-        }
+        Self { scanner, cur_token }
     }
 
-    pub fn parse(&mut self) -> Vec<Stmt> {
+    pub fn parse(&mut self) -> (Vec<Stmt>, bool) {
         let mut statements: Vec<Stmt> = Vec::new();
-        let env = Environment::new();
-        let mut interpreter = Interpreter::new(env);
+        let mut had_error = false;
         while self.cur_token.token_type != Eof {
             match self.declaration() {
                 Ok(stmt) => {
                     if matches!(stmt, Stmt::Null) {
                         continue;
                     }
-                    println!("stmt: {}", stmt);
-                    if let Err(err) = interpreter.interpret_statement(stmt.clone()) {
-                        self.report_error(err);
-                    }
                     statements.push(stmt)
                 }
-                Err(err) => self.report_error(err),
+                Err(err) => {
+                    self.report_error(&err);
+                    had_error = true;
+                }
             }
         }
-        statements
+        (statements, had_error)
     }
 
     fn consume_token(&mut self) -> Token {
@@ -196,90 +171,515 @@ impl Parser {
         cur_token
     }
 
-    fn declaration(&mut self) -> Result<Stmt, Error> {
-        if self.match_next(&[NewLine]).is_some() {
-            return Ok(Stmt::Null);
+    fn declaration(&mut self) -> Result<Stmt> {
+        match self.cur_token.token_type {
+            Eof => {
+                self.consume_token();
+                Ok(Stmt::Null)
+            }
+            Class => self.class_declaration(),
+            Fun => self.fun_declaration(),
+            Let | Lit => self.var_declaration(),
+            _ => self.statement(),
         }
-        if self.match_next(&[Let]).is_some() {
-            return self.var_declaration();
-        }
-        self.statement()
     }
 
-    fn var_declaration(&mut self) -> Result<Stmt, Error> {
+    fn class_declaration(&mut self) -> Result<Stmt> {
+        self.consume_token(); // consume the `class`
+
         let cur_token = self.consume_token();
-        let var_name = match cur_token.token_type {
+        let class_name = match cur_token.token_type {
+            Identifier(name) => name,
+
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Fatal(SyntaxError),
+                    format!("Expected class name. Found `{}`", cur_token),
+                    &cur_token,
+                ))
+            }
+        };
+
+        if self.match_next(&[LeftBrace]).is_none() {
+            return Err(Error::new(
+                ErrorKind::Fatal(SyntaxError),
+                format!(
+                    "Expected `{{` after class name. Found `{}` ",
+                    self.cur_token
+                ),
+                &self.cur_token,
+            ));
+        }
+
+        let mut stmts = Vec::new();
+
+        while !matches!(self.cur_token.token_type, RightBrace | Eof) {
+            let decl = match self.cur_token.token_type {
+                Let | Lit => self.var_declaration()?,
+                Meth => {
+                    self.consume_token(); // consume the `meth`
+
+                    let cur_token = self.consume_token();
+                    let meth_name = match cur_token.token_type {
+                        Identifier(name) => name,
+
+                        _ => {
+                            return Err(Error::new(
+                                ErrorKind::Fatal(SyntaxError),
+                                format!("Expected method name. Found `{}`.", cur_token),
+                                &cur_token,
+                            ))
+                        }
+                    };
+
+                    let (params, default_params, has_varargs, stmt) = self.finish_fun(true)?;
+
+                    Stmt::FunDecl(
+                        Some(meth_name),
+                        params,
+                        default_params,
+                        has_varargs,
+                        Box::new(stmt),
+                    )
+                }
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::Fatal(SyntaxError),
+                        format!(
+                            "Expected variable or method declaration. Found `{}`.",
+                            self.cur_token
+                        ),
+                        &self.cur_token,
+                    ))
+                }
+            };
+
+            stmts.push(decl);
+        }
+
+        // TODO: IMPROVE PARSING OF CLASS STATEMENTS
+        self.consume_token();
+
+        if self.cur_token.token_type == Eof {
+            return Err(Error::new_without_token(
+                ErrorKind::Fatal(UnterminatedBlock),
+                format!(
+                    "Expected `}}` after class declaration. Found `{}` ",
+                    self.cur_token
+                ),
+                (self.cur_token.pos.0, self.cur_token.pos.1 - 1),
+                // go back 1 char because Eof is outside of the program text
+                self.cur_token.to_string().len(),
+            ));
+        }
+
+        Ok(Stmt::ClassDecl(class_name, stmts))
+    }
+
+    fn fun_declaration(&mut self) -> Result<Stmt> {
+        self.consume_token(); // consume the `fun`
+
+        let cur_token = self.consume_token();
+        let fun_name = match cur_token.token_type {
+            Identifier(name) => name,
+
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Fatal(ParseError),
+                    format!("Expected Function name. Found `{}`.", cur_token),
+                    &cur_token,
+                ))
+            }
+        };
+
+        let (params, default_params, has_varargs, body_box) = self.finish_fun(false)?;
+
+        Ok(Stmt::FunDecl(
+            Some(fun_name),
+            params,
+            default_params,
+            has_varargs,
+            Box::new(body_box),
+        ))
+    }
+
+    fn var_declaration(&mut self) -> Result<Stmt> {
+        self.consume_token(); // consume the `let` or `lit`
+
+        let cur_token = self.consume_token();
+        let var_name = match cur_token.clone().token_type {
             Identifier(name) => name,
             t => {
                 return Err(Error::new(
-                    ErrorType::SyntaxError,
+                    ErrorKind::Fatal(SyntaxError),
                     format!("Expected variable name. Found `{}`", t),
-                    cur_token.linenum,
+                    &cur_token,
                 ))
             }
         };
 
         let mut initializer = None;
-        if self.match_next(&[Equal]).is_some() {
+
+        if self.match_next(&[Equal, Be]).is_some() {
             let expr = self.expression()?;
-            initializer = Some(Box::new(expr))
+            initializer = Some(expr)
         }
 
-        self.consume_token(); // consume NewLine
-        Ok(Stmt::VarDecl(var_name, initializer))
-    }
-
-    fn statement(&mut self) -> Result<Stmt, Error> {
-        if self.match_next(&[Print]).is_some() {
-            return self.print_statement();
+        match self.consume_token() {
+            t if matches!(t.token_type, Semicolon | RN) => Ok(Stmt::VarDecl(var_name, initializer)),
+            t => Err(Error::new(
+                ErrorKind::Fatal(ParseError),
+                format!("Expected `;` before this Token. Found `{}`.", t),
+                &t,
+            )),
         }
-
-        self.expression_statement()
     }
 
-    fn expression_statement(&mut self) -> Result<Stmt, Error> {
+    fn statement(&mut self) -> Result<Stmt> {
+        match self.cur_token.token_type {
+            Try | FkAround => self.try_statement(),
+            If | AightBet => self.if_statement(),
+            Print => self.print_statement(),
+            For => self.for_statement(),
+            While => self.while_statemtent(),
+            Throw => self.throw_statement(),
+            Return | Yeet => self.return_statement(),
+            Continue => self.continue_statement(),
+            Break => self.break_statement(),
+            LeftBrace => self.block_statement(),
+
+            _ => self.expression_statement(),
+        }
+    }
+
+    fn expression_statement(&mut self) -> Result<Stmt> {
         let expr = self.expression()?;
 
-        self.consume_token(); // consume NewLine
-        Ok(Stmt::Expression(Box::new(expr)))
+        match self.consume_token() {
+            t if matches!(t.token_type, Semicolon | RN) => Ok(Stmt::Expression(expr)),
+            t => Err(Error::new(
+                ErrorKind::Fatal(ParseError),
+                format!("Expected `;` before this Token. Found `{}`.", t),
+                &t,
+            )),
+        }
     }
 
-    fn print_statement(&mut self) -> Result<Stmt, Error> {
-        let mut expressions: Vec<Expr> = Vec::new();
+    fn try_statement(&mut self) -> Result<Stmt> {
+        self.consume_token(); // consume the Try or FkAround
 
-        loop {
-            let token = &self.cur_token.token_type;
+        let try_stmt = self.statement()?;
+        let mut catch_stmts = Vec::new();
 
-            if matches!(token, NewLine | Eof) {
-                break;
+        while self.match_next(&[Catch, FindOut]).is_some() {
+            let error = match self.match_next(&[
+                TokenType::Error,
+                TokenType::TypeError,
+                TokenType::NameError,
+                TokenType::IndexError,
+                TokenType::ValueError,
+            ]) {
+                Some(tok) => tok,
+
+                None => {
+                    return Err(Error::new(
+                        ErrorKind::Fatal(SyntaxError),
+                        format!(
+                            "Expected Exceptin type after `catch`. Found `{}`.",
+                            self.cur_token
+                        ),
+                        &self.cur_token,
+                    ))
+                }
+            };
+
+            let mut variable_opt = None;
+
+            if self.match_next(&[As]).is_some() {
+                let cur_token = self.consume_token();
+
+                variable_opt = match cur_token.token_type {
+                    Identifier(name) => Some(name),
+
+                    _ => {
+                        return Err(Error::new(
+                            ErrorKind::Fatal(SyntaxError),
+                            "Expected Identifier to assign the Error to.".to_string(),
+                            &cur_token,
+                        ))
+                    }
+                }
             }
 
-            let expr = self.expression()?;
-            expressions.push(expr)
+            let catch_stmt = self.statement()?;
+
+            catch_stmts.push((error, variable_opt, catch_stmt));
         }
 
-        self.consume_token(); // consume NewLine
+        if catch_stmts.is_empty() {
+            return Err(Error::new(
+                ErrorKind::Fatal(ParseError),
+                format!(
+                    "Expected `catch` after `try` block. Found `{}`.",
+                    self.cur_token
+                ),
+                &self.cur_token,
+            ));
+        }
 
-        Ok(Stmt::Print(expressions))
+        Ok(Stmt::TryCatch(Box::new(try_stmt), catch_stmts))
     }
 
-    fn expression(&mut self) -> Result<Expr, Error> {
+    fn if_statement(&mut self) -> Result<Stmt> {
+        self.consume_token(); // consume the If or AightBet or LowkeyTho
+
+        let cond = self.expression()?;
+        let then_branch = self.statement()?;
+        let mut else_branch = None;
+
+        // else-if (i.e. fr tho)
+        if self.cur_token.token_type == FrTho {
+            let else_if_branch = self.if_statement()?;
+            else_branch = Some(Box::new(else_if_branch))
+        }
+        // else or nah dawg
+        else if self.match_next(&[Else, NahDawg]).is_some() {
+            else_branch = Some(Box::new(self.statement()?));
+        }
+
+        Ok(Stmt::If(cond, Box::new(then_branch), else_branch))
+    }
+
+    fn print_statement(&mut self) -> Result<Stmt> {
+        self.consume_token(); // consume the `print`
+
+        let expr = self.expression()?;
+
+        match self.consume_token() {
+            t if matches!(t.token_type, Semicolon | RN) => Ok(Stmt::Print(expr)),
+            t => Err(Error::new(
+                ErrorKind::Fatal(ParseError),
+                format!("Expected `;` before this Token. Found `{}`.", t),
+                &t,
+            )),
+        }
+    }
+
+    fn for_statement(&mut self) -> Result<Stmt> {
+        let for_token = self.consume_token(); // consume the `for`
+
+        if self.match_next(&[LeftParen]).is_none() {
+            return self.for_in_statement(for_token);
+        }
+
+        let mut initializer = None;
+        match self.cur_token.token_type {
+            Let | Lit => initializer = Some(Box::new(self.var_declaration()?)),
+            Semicolon | RN => {
+                self.consume_token();
+            }
+            _ => initializer = Some(Box::new(self.expression_statement()?)),
+        }
+
+        let mut cond = None;
+        match self.cur_token.token_type {
+            Semicolon | RN => {
+                self.consume_token();
+            }
+            _ => {
+                // using expression_statement() instead of expression() because it will take care
+                // of the Semicolon
+                let expr_stmt = self.expression_statement()?;
+                match expr_stmt {
+                    Stmt::Expression(expr) => cond = Some(expr),
+                    _ => panic!("ERROR"), // not possible
+                }
+            }
+        }
+
+        let mut increment = None;
+        match self.cur_token.token_type {
+            RightParen => (), // it is consumed in the next if statement
+
+            // not using expression_statement() statement because there is no Semicolon
+            _ => increment = Some(self.expression()?),
+        }
+
+        if self.match_next(&[RightParen]).is_none() {
+            return Err(Error::new(
+                ErrorKind::Fatal(SyntaxError),
+                "Expected `)` after `for` clauses.".to_string(),
+                &self.cur_token,
+            ));
+        }
+
+        let body = Box::new(self.statement()?);
+
+        Ok(Stmt::For(initializer, cond, increment, body))
+    }
+
+    fn for_in_statement(&mut self, for_token: Token) -> Result<Stmt> {
+        let cur_token = self.consume_token();
+        let var_name = match cur_token.token_type {
+            Identifier(name) => name,
+
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Fatal(SyntaxError),
+                    format!("Expected variable. Found `{}`.", cur_token),
+                    &cur_token,
+                ));
+            }
+        };
+
+        let list = self.expression()?;
+
+        let for_stmt = self.statement()?;
+
+        Ok(Stmt::ForIn(for_token, var_name, list, Box::new(for_stmt)))
+    }
+
+    fn while_statemtent(&mut self) -> Result<Stmt> {
+        self.consume_token(); // consume the `while`
+
+        let cond = self.expression()?;
+
+        let body = self.statement()?;
+
+        Ok(Stmt::While(cond, Box::new(body)))
+    }
+
+    fn throw_statement(&mut self) -> Result<Stmt> {
+        self.consume_token(); // consume the `throw`
+
+        let exception_token = match &self.cur_token.token_type {
+            TokenType::Error
+            | TokenType::TypeError
+            | TokenType::NameError
+            | TokenType::IndexError
+            | TokenType::ValueError => self.consume_token(),
+
+            tt => {
+                return Err(Error::new(
+                    ErrorKind::Exception(ExceptionKind::NameError),
+                    format!("Value `{}` not found in the current scope.", tt),
+                    &self.cur_token,
+                ))
+            }
+        };
+
+        let mut custom_message = None;
+        if self.match_next(&[LeftParen]).is_some() {
+            let expr = self.expression()?;
+            custom_message = Some(expr);
+
+            if self.match_next(&[RightParen]).is_none() {
+                return Err(Error::new(
+                    ErrorKind::Fatal(SyntaxError),
+                    format!(
+                        "Expected `)` after error message. Found `{}`",
+                        self.cur_token
+                    ),
+                    &self.cur_token,
+                ));
+            }
+        }
+
+        match self.consume_token() {
+            t if matches!(t.token_type, Semicolon | RN) => {
+                Ok(Stmt::Throw(exception_token, custom_message))
+            }
+            t => Err(Error::new(
+                ErrorKind::Fatal(ParseError),
+                format!("Expected `;` before this Token. Found `{}`.", t),
+                &t,
+            )),
+        }
+    }
+
+    fn return_statement(&mut self) -> Result<Stmt> {
+        let ret_token = self.consume_token();
+        let ret_expr = self.expression()?;
+
+        match self.consume_token() {
+            t if matches!(t.token_type, Semicolon | RN) => Ok(Stmt::Return(ret_token, ret_expr)),
+            t => Err(Error::new(
+                ErrorKind::Fatal(ParseError),
+                format!("Expected `;` before this Token Found `{}`.", t),
+                &t,
+            )),
+        }
+    }
+
+    fn continue_statement(&mut self) -> Result<Stmt> {
+        let cont_token = self.consume_token();
+
+        match self.consume_token() {
+            t if matches!(t.token_type, Semicolon | RN) => Ok(Stmt::Continue(cont_token)),
+            t => Err(Error::new(
+                ErrorKind::Fatal(ParseError),
+                format!("Expected `;` before this Token Found `{}`.", t),
+                &t,
+            )),
+        }
+    }
+
+    fn break_statement(&mut self) -> Result<Stmt> {
+        let break_token = self.consume_token();
+
+        match self.consume_token() {
+            t if matches!(t.token_type, Semicolon | RN) => Ok(Stmt::Break(break_token)),
+            t => Err(Error::new(
+                ErrorKind::Fatal(ParseError),
+                format!("Expected `;` before this Token. Found `{}`.", t),
+                &t,
+            )),
+        }
+    }
+
+    fn block_statement(&mut self) -> Result<Stmt> {
+        self.consume_token(); // consume the `{`
+
+        let mut statements: Vec<Stmt> = Vec::new();
+
+        while !matches!(self.cur_token.token_type, RightBrace | Eof) {
+            let stmt = self.declaration()?;
+            statements.push(stmt);
+        }
+
+        let cur_token = self.consume_token();
+        match cur_token.token_type {
+            RightBrace => Ok(Stmt::Block(statements)),
+            _ => Err(Error::new(
+                ErrorKind::Fatal(UnterminatedBlock),
+                "Expected `}` after block.".to_string(),
+                &Token::new(RightBrace, (cur_token.pos.0, cur_token.pos.1 - 1)), // go back one char
+            )),
+        }
+    }
+
+    fn expression(&mut self) -> Result<Expr> {
         self.assignment()
     }
 
-    fn assignment(&mut self) -> Result<Expr, Error> {
-        let expr = self.ternary()?;
+    fn assignment(&mut self) -> Result<Expr> {
+        let expr = self.logical_or()?;
 
-        if let Some(eq) = self.match_next(&[Equal]) {
+        if let Some(eq) = self.match_next(&[Equal, Be]) {
             let value = self.assignment()?;
 
             match expr {
-                Expr::Variable(var) => return Ok(Expr::Assign(var, Box::new(value))),
-                e => {
+                Expr::Variable(_) | Expr::Index(_, _, _) => {
+                    return Ok(Expr::Assign(Box::new(expr), Box::new(value)))
+                }
+
+                Expr::Get(target, field) => return Ok(Expr::Set(target, field, Box::new(value))),
+
+                _ => {
                     return Err(Error::new(
-                        ErrorType::InvalidAssignmentTarget,
-                        format!("Expected variable. Found `{}`", e),
-                        eq.linenum,
+                        ErrorKind::Exception(ExceptionKind::TypeError),
+                        "Can't assign to an expression.".to_string(),
+                        &eq,
                     ))
                 }
             }
@@ -288,7 +688,31 @@ impl Parser {
         Ok(expr)
     }
 
-    fn ternary(&mut self) -> Result<Expr, Error> {
+    fn logical_or(&mut self) -> Result<Expr> {
+        let mut expr = self.logical_and()?;
+
+        if let Some(token) = self.match_next(&[Or]) {
+            let right = self.logical_and()?;
+
+            expr = Expr::Logical(Box::new(expr), token, Box::new(right));
+        }
+
+        Ok(expr)
+    }
+
+    fn logical_and(&mut self) -> Result<Expr> {
+        let mut expr = self.ternary()?;
+
+        if let Some(token) = self.match_next(&[And]) {
+            let right = self.ternary()?;
+
+            expr = Expr::Logical(Box::new(expr), token, Box::new(right))
+        }
+
+        Ok(expr)
+    }
+
+    fn ternary(&mut self) -> Result<Expr> {
         let mut expr = self.equality()?;
 
         if self.match_next(&[Question]).is_some() {
@@ -297,108 +721,278 @@ impl Parser {
                 Some(token) if token.token_type == Colon => self.equality()?,
                 _ => {
                     return Err(Error::new(
-                        ErrorType::UnexpectedToken,
+                        ErrorKind::Fatal(UnexpectedToken),
                         "Expected ':' operator!".to_string(),
-                        self.cur_token.linenum,
+                        &self.cur_token,
                     ));
                 }
             };
-            expr = Expr::new_ternary(expr, if_right, if_wrong);
+            expr = Expr::Ternary(Box::new(expr), Box::new(if_right), Box::new(if_wrong));
         }
 
         Ok(expr)
     }
 
-    fn equality(&mut self) -> Result<Expr, Error> {
+    fn equality(&mut self) -> Result<Expr> {
         let mut expr = self.comparison()?;
 
-        while let Some(operator) = self.match_next(&[BangEqual, EqualEqual]) {
+        while let Some(operator) = self.match_next(&[BangEqual, EqualEqual, Is]) {
             let right = self.comparison()?;
-            expr = Expr::new_binary(expr, operator, right);
+            expr = Expr::Binary(Box::new(expr), operator, Box::new(right));
         }
 
         Ok(expr)
     }
 
-    fn comparison(&mut self) -> Result<Expr, Error> {
+    fn comparison(&mut self) -> Result<Expr> {
         let mut expr = self.term()?;
 
         while let Some(operator) = self.match_next(&[Greater, GreaterEqual, Less, LessEqual]) {
             let right = self.term()?;
-            expr = Expr::new_binary(expr, operator, right)
+            expr = Expr::Binary(Box::new(expr), operator, Box::new(right))
         }
 
         Ok(expr)
     }
 
-    fn term(&mut self) -> Result<Expr, Error> {
+    fn term(&mut self) -> Result<Expr> {
         let mut expr = self.factor()?;
 
         while let Some(operator) = self.match_next(&[Plus, Minus]) {
             let right = self.factor()?;
-            expr = Expr::new_binary(expr, operator, right)
+            expr = Expr::Binary(Box::new(expr), operator, Box::new(right))
         }
 
         Ok(expr)
     }
 
-    fn factor(&mut self) -> Result<Expr, Error> {
+    fn factor(&mut self) -> Result<Expr> {
+        let mut expr = self.power()?;
+
+        while let Some(operator) = self.match_next(&[Modulus, Slash, SlashSlash, Star]) {
+            let right = self.power()?;
+            expr = Expr::Binary(Box::new(expr), operator, Box::new(right))
+        }
+        Ok(expr)
+    }
+
+    fn power(&mut self) -> Result<Expr> {
         let mut expr = self.unary()?;
 
-        while let Some(operator) = self.match_next(&[Slash, SlashSlash, Star]) {
+        while let Some(operator) = self.match_next(&[StarStar]) {
             let right = self.unary()?;
-            expr = Expr::new_binary(expr, operator, right)
+            expr = Expr::Binary(Box::new(expr), operator, Box::new(right))
         }
+
         Ok(expr)
     }
 
-    fn unary(&mut self) -> Result<Expr, Error> {
+    fn unary(&mut self) -> Result<Expr> {
         if let Some(operator) = self.match_next(&[Minus, Bang]) {
             let right = self.unary()?;
-            return Ok(Expr::new_unary(operator, right));
+            return Ok(Expr::Unary(operator, Box::new(right)));
         }
-        self.primary()
+        self.increment()
     }
 
-    fn primary(&mut self) -> Result<Expr, Error> {
-        let next_token = self.consume_token();
-        match next_token.clone().token_type {
+    fn increment(&mut self) -> Result<Expr> {
+        // for prefix increment/decrement
+        if let Some(operator) = self.match_next(&[PlusPlus, MinusMinus]) {
+            let expr = self.primary()?;
+            match expr {
+                Expr::Variable(_) | Expr::Index(_, _, _) => {
+                    return Ok(Expr::Increment(Some(operator), Box::new(expr), None))
+                }
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::Fatal(ParseError),
+                        format!(
+                            "Can't perform the `{}` operator on anything other than a Variable.",
+                            operator
+                        ),
+                        &operator,
+                    ))
+                }
+            }
+        };
+
+        let expr = self.primary()?;
+
+        // for postfix increment/decrement
+        if let Some(operator) = self.match_next(&[PlusPlus, MinusMinus]) {
+            match expr {
+                Expr::Variable(_) | Expr::Index(_, _, _) => {
+                    return Ok(Expr::Increment(None, Box::new(expr), Some(operator)));
+                }
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::Fatal(ParseError),
+                        format!(
+                            "Can't perform the `{}` operator on anything other than a Variable.",
+                            operator
+                        ),
+                        &operator,
+                    ))
+                }
+            }
+        };
+
+        Ok(expr)
+    }
+
+    fn primary(&mut self) -> Result<Expr> {
+        let mut expr = self.literal()?;
+
+        loop {
+            match self.cur_token.token_type {
+                // function call
+                LeftParen => {
+                    self.consume_token();
+
+                    expr = self.finish_call(expr)?;
+                }
+
+                // index
+                LeftBracket => {
+                    self.consume_token();
+
+                    let index = self.expression()?;
+
+                    if let Some(rb) = self.match_next(&[RightBracket]) {
+                        expr = Expr::Index(Box::new(expr), Box::new(index), rb);
+                    } else {
+                        return Err(Error::new(
+                            ErrorKind::Fatal(ParseError),
+                            format!("Expected `]` after index. Found `{}`.", self.cur_token),
+                            &self.cur_token,
+                        ));
+                    }
+                }
+
+                // get
+                Dot => {
+                    self.consume_token();
+
+                    let field = match self.cur_token.token_type {
+                        Identifier(_) => self.consume_token(),
+                        _ => {
+                            return Err(Error::new(
+                                ErrorKind::Fatal(SyntaxError),
+                                format!(
+                                    "Expected field name after `.`. Found `{}`.",
+                                    self.cur_token
+                                ),
+                                &self.cur_token,
+                            ))
+                        }
+                    };
+
+                    expr = Expr::Get(Box::new(expr), field);
+                }
+
+                _ => break,
+            }
+        }
+
+        Ok(expr)
+    }
+
+    fn literal(&mut self) -> Result<Expr> {
+        let cur_token = self.consume_token();
+        match cur_token.token_type {
+            // Literal
             Boolean(val) => Ok(Expr::Literal(Value::Boolean(val))),
+            NoCap => Ok(Expr::Literal(Value::Boolean(true))),
+            Cap => Ok(Expr::Literal(Value::Boolean(false))),
             Number(num) => Ok(Expr::Literal(Value::Number(num))),
             String(str) => Ok(Expr::Literal(Value::String(str))),
+            TypeLiteral(type_name) => Ok(Expr::Literal(Value::Type(type_name))),
             Nil => Ok(Expr::Literal(Value::Nil)),
 
+            // Group
             LeftParen => {
                 let expr = self.expression()?;
                 let next_token = self.consume_token();
                 match next_token.token_type {
                     RightParen => Ok(Expr::Group(Box::new(expr))),
-                    _ => {
-                        let message = "Expected ')'".to_string();
-                        Err(Error::new(
-                            ErrorType::SyntaxError,
-                            message,
-                            next_token.linenum,
-                        ))
-                    }
+                    _ => Err(Error::new(
+                        ErrorKind::Fatal(SyntaxError),
+                        "Expected ')'.".to_string(),
+                        &next_token,
+                    )),
                 }
             }
-            Identifier(_) => Ok(Expr::Variable(next_token)),
 
-            t if self.check_binary(&t) => Err(Error::new(
-                ErrorType::SyntaxError,
+            // List
+            LeftBracket => {
+                let mut list = Vec::new();
+                if self.match_next(&[RightBracket]).is_some() {
+                    return Ok(Expr::List(list));
+                }
+                loop {
+                    if self.cur_token.token_type == Eof {
+                        return Err(Error::new(
+                            ErrorKind::Fatal(UnterminatedList),
+                            "Expected `]` after List.".to_string(),
+                            &self.cur_token,
+                        ));
+                    }
+
+                    let item = self.expression()?;
+
+                    if self.match_next(&[RightBracket]).is_some() {
+                        list.push(item);
+                        break;
+                    }
+
+                    if self.match_next(&[Comma]).is_none() {
+                        return Err(Error::new(
+                            ErrorKind::Fatal(UnexpectedToken),
+                            "Expected `,` after List element.".to_string(),
+                            &self.cur_token,
+                        ));
+                    }
+
+                    list.push(item);
+                }
+                Ok(Expr::List(list))
+            }
+
+            // Variable
+            Identifier(_) => Ok(Expr::Variable(cur_token)),
+
+            // Closure
+            Fun => {
+                let (params, default_params, has_varargs, stmt) = self.finish_fun(true)?;
+                Ok(Expr::Closure(
+                    params,
+                    default_params,
+                    has_varargs,
+                    Box::new(stmt),
+                ))
+            }
+
+            ref tt if self.check_binary(tt) => Err(Error::new(
+                ErrorKind::Fatal(SyntaxError),
                 "Operand missing!".to_string(),
-                next_token.linenum,
+                &cur_token,
+            )),
+
+            ref tt if matches!(tt, Catch | FindOut) => Err(Error::new(
+                ErrorKind::Fatal(SyntaxError),
+                "Can't use `tt` without an associated `try` block.".to_string(),
+                &cur_token,
             )),
 
             _ => Err(Error::new(
-                ErrorType::SyntaxError,
+                ErrorKind::Fatal(SyntaxError),
                 "Expression expected!".to_string(),
-                next_token.linenum,
+                &cur_token,
             )),
         }
     }
 
+    // HELPER FUNCTIONS
     fn match_next(&mut self, matches: &[TokenType]) -> Option<Token> {
         for token_type in matches {
             if token_type == &self.cur_token.token_type {
@@ -408,11 +1002,34 @@ impl Parser {
         None
     }
 
+    fn synchronize_parser(&mut self) {
+        while self.cur_token.token_type != Eof {
+            match self.cur_token.token_type {
+                Try | FkAround | Catch | FindOut | If | AightBet | Print | For | While | Return
+                | Yeet | Continue | Break => return,
+                Semicolon | RN => {
+                    self.consume_token();
+                    return;
+                }
+                _ => (),
+            };
+
+            self.consume_token();
+        }
+    }
+
+    pub fn report_error(&mut self, err: &Error) {
+        let line = self.scanner.get_line(err.pos.0).unwrap();
+        err.display(line);
+        self.synchronize_parser();
+    }
+
     fn check_binary(&self, token: &TokenType) -> bool {
         matches!(
             token,
             BangEqual
                 | EqualEqual
+                | Is
                 | Greater
                 | GreaterEqual
                 | Less
@@ -424,21 +1041,161 @@ impl Parser {
         )
     }
 
-    fn synchronize_parser(&mut self) {
-        self.consume_token();
+    fn finish_fun(
+        &mut self,
+        is_closure: bool,
+    ) -> Result<(Vec<String>, Vec<(String, Expr)>, bool, Stmt)> {
+        if self.match_next(&[LeftParen]).is_none() {
+            let mut err_msg = "Expected `(` after function name.";
 
-        while self.cur_token.token_type != Eof {
-            if self.consume_token().token_type != NewLine {
-                return;
+            if is_closure {
+                err_msg = "Expected `(` after `fun`."
+            }
+            return Err(Error::new(
+                ErrorKind::Fatal(SyntaxError),
+                err_msg.to_string(),
+                &self.cur_token,
+            ));
+        }
+
+        let mut params = Vec::new();
+        let mut default_params = Vec::new();
+        let mut has_varargs = false;
+
+        if self.match_next(&[RightParen]).is_some() {
+            let stmt = self.statement()?;
+            return Ok((params, default_params, has_varargs, stmt));
+        }
+
+        loop {
+            let var_token = self.consume_token();
+
+            if !matches!(var_token.token_type, Identifier(_)) {
+                return Err(Error::new(
+                    ErrorKind::Fatal(ParseError),
+                    "Expected parameter name.".to_string(),
+                    &var_token,
+                ));
+            }
+
+            // handle default parameter
+            // if there is already a default parameter declared, and the next parameter is a regular one
+            if !default_params.is_empty() && !matches!(self.cur_token.token_type, Equal | Be) {
+                // normal error message
+                let mut err_message =
+                    "Parameters with a default should follow parameters without a default.";
+                let mut err_token = var_token;
+
+                // error message when the next token is Varargs
+                if let Some(varargs) = self.match_next(&[Varargs]) {
+                    err_message = "Can't use varargs when you have a default parameter.";
+                    err_token = varargs;
+                }
+
+                return Err(Error::new(
+                    ErrorKind::Fatal(SyntaxError),
+                    err_message.to_string(),
+                    &err_token,
+                ));
+            }
+
+            let Identifier(var_name) = var_token.token_type else {
+                unreachable!();
+            };
+
+            if self.match_next(&[Equal, Be]).is_some() {
+                let expr = self.expression()?;
+
+                default_params.push((var_name, expr));
+            } else {
+                // handle regular parameter
+                params.push(var_name);
+            }
+
+            // handle varargs
+            if let Some(varargs) = self.match_next(&[Varargs]) {
+                if !default_params.is_empty() {
+                    return Err(Error::new(
+                        ErrorKind::Fatal(SyntaxError),
+                        "Can't use varargs when you have a default parameter.".to_string(),
+                        &varargs,
+                    ));
+                }
+
+                has_varargs = true;
+            }
+
+            if let Some(comma) = self.match_next(&[Comma]) {
+                if has_varargs {
+                    return Err(Error::new(
+                        ErrorKind::Fatal(SyntaxError),
+                        "Varargs parameter should be positioned last.".to_string(),
+                        &comma,
+                    ));
+                }
+            } else {
+                break;
             }
         }
+
+        if self.match_next(&[RightParen]).is_none() {
+            return Err(Error::new(
+                ErrorKind::Fatal(SyntaxError),
+                "Expected `)` after function parameters.".to_string(),
+                &self.cur_token,
+            ));
+        }
+
+        let stmt = self.statement()?;
+
+        Ok((params, default_params, has_varargs, stmt))
     }
 
-    fn report_error(&self, err: Error) {
-        let mut line = "Somewhere, idk! ¯\\_(o _ o)_/¯".to_string();
-        if err.err_linenum != 0 {
-            line = self.scanner.get_line(err.err_linenum).unwrap().to_string();
+    fn finish_call(&mut self, callee: Expr) -> Result<Expr> {
+        let mut arguments = Vec::new();
+
+        // if the function is called directly like `print()`
+        // or `like some_instance.print()`, get the `print` token
+        let mut callee_token_opt = match &callee {
+            Expr::Variable(token) => Some(token.clone()),
+            Expr::Get(_, token) => Some(token.clone()),
+
+            _ => None,
+        };
+
+        if self.cur_token.token_type != RightParen {
+            arguments.push(self.expression()?);
+            while self.match_next(&[Comma]).is_some() {
+                if arguments.len() >= 255 {
+                    return Err(Error::new(
+                        ErrorKind::Fatal(ParseError),
+                        "Can't have more than 255 arguments in a function!".to_string(),
+                        &self.cur_token,
+                    ));
+                }
+                arguments.push(self.expression()?);
+            }
         }
-        err.display(line);
+
+        if let Some(rp) = self.match_next(&[RightParen]) {
+            // if the function is NOT called like `print()`, get the RightParen
+            if callee_token_opt.is_none() {
+                callee_token_opt = Some(rp)
+            }
+            Ok(Expr::Call(
+                Box::new(callee),
+                arguments,
+                callee_token_opt.unwrap(),
+            ))
+        } else {
+            Err(Error::new(
+                ErrorKind::Fatal(ParseError),
+                format!(
+                    "Expected `)` after function arguments. Found `{}`.",
+                    self.cur_token
+                ),
+                &self.cur_token,
+            ))
+        }
     }
 }

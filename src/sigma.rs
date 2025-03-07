@@ -24,17 +24,20 @@ impl Sigma {
     }
 
     pub fn run_file(&mut self, file_path: &str) {
-        if !file_path.is_empty() {
-            let file_contents = fs::read_to_string(file_path)
-                .expect("No such file or directory!")
-                .trim()
-                .to_string();
+        let file_contents = fs::read_to_string(file_path)
+            .expect("No such file or directory!")
+            .trim()
+            .to_string();
 
-            self.run(&file_contents);
-        };
+        self.run(&file_contents);
     }
 
     pub fn run_prompt(&mut self) {
+        println!("Welcome to the brainrot programming language!\n");
+        println!("Some commands:");
+        println!("    :clear -> clear the screen");
+        println!("    :q -> quit\n");
+
         loop {
             print!("🗿 >> ");
             io::stdout().flush().unwrap();

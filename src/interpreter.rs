@@ -291,6 +291,21 @@ impl Interpreter {
         let list = match self.interpret_expression(expr)? {
             Value::List(list_val) => list_val.borrow().clone().into_iter(),
 
+            Value::Range(num1, num2) => {
+                if num1 <= num2 {
+                    (num1..num2)
+                        .map(|num| Value::Number(num as f64))
+                        .collect::<Vec<Value>>()
+                        .into_iter()
+                } else {
+                    (num2..num1)
+                        .rev()
+                        .map(|num| Value::Number(num as f64))
+                        .collect::<Vec<Value>>()
+                        .into_iter()
+                }
+            }
+
             v => {
                 return Err(Error::new(
                     ErrorKind::Exception(ExceptionKind::TypeError),
@@ -446,7 +461,12 @@ impl Interpreter {
                 self.interpret_index_expr(expr.as_ref(), index_expr.as_ref(), err_token)
             }
             Expr::List(expr_vec) => self.interpret_list_expr(expr_vec),
-            Expr::Assign(name, expr) => self.interpret_assign_expr(name.as_ref(), expr.as_ref()),
+            Expr::Assign(name, op, expr) => {
+                self.interpret_assign_expr(name.as_ref(), op, expr.as_ref())
+            }
+            Expr::Range(left, op, right) => {
+                self.interpret_range_expr(left.as_ref(), op, right.as_ref())
+            }
             Expr::Call(callee, args, err_token) => {
                 self.interpret_call_expr(callee.as_ref(), args, err_token)
             }
@@ -538,14 +558,14 @@ impl Interpreter {
         let default_err = Error::new(
             ErrorKind::Exception(ExceptionKind::ValueError),
             format!(
-                "Binary operation, `{}` is not supported b/w `{:?}` and `{:?}`.",
+                "Binary operation `{}` is not supported b/w `{:?}` and `{:?}`.",
                 op, left_val, right_val
             ),
             op,
         );
 
         match op.token_type {
-            Plus => match (left_val, right_val) {
+            Plus | PlusEqual => match (left_val, right_val) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l + r)),
                 (Value::String(l), Value::String(r)) => Ok(Value::String(format!("{}{}", l, r))),
                 (Value::String(str), val)
@@ -573,17 +593,17 @@ impl Interpreter {
                     Ok(Value::List(l))
                 }
 
-                (_, _) => Err(default_err),
+                _ => Err(default_err),
             },
-            Minus => match (left_val, right_val) {
+            Minus | MinusEqual => match (left_val, right_val) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l - r)),
-                (_, _) => Err(default_err),
+                _ => Err(default_err),
             },
-            Modulus => match (left_val, right_val) {
+            Modulus | ModulusEqual => match (left_val, right_val) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l % r)),
-                (_, _) => Err(default_err),
+                _ => Err(default_err),
             },
-            Star => match (left_val, right_val) {
+            Star | StarEqual => match (left_val, right_val) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l * r)),
 
                 // String * Number
@@ -646,19 +666,19 @@ impl Interpreter {
 
                     Ok(Value::List(val_list))
                 }
-                (_, _) => Err(default_err),
+                _ => Err(default_err),
             },
             StarStar => match (left_val, right_val) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l.powf(r))),
-                (_, _) => Err(default_err),
+                _ => Err(default_err),
             },
-            Slash => match (left_val, right_val) {
+            Slash | SlashEqual => match (left_val, right_val) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l / r)),
-                (_, _) => Err(default_err),
+                _ => Err(default_err),
             },
             SlashSlash => match (left_val, right_val) {
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Number((l / r).floor())),
-                (_, _) => Err(default_err),
+                _ => Err(default_err),
             },
 
             // Comparison
@@ -675,22 +695,22 @@ impl Interpreter {
             Greater => match (left_val, right_val) {
                 // only allow numbers
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Boolean(l > r)),
-                (_, _) => Err(default_err),
+                _ => Err(default_err),
             },
             GreaterEqual => match (left_val, right_val) {
                 // only allow numbers
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Boolean(l >= r)),
-                (_, _) => Err(default_err),
+                _ => Err(default_err),
             },
             Less => match (left_val, right_val) {
                 // only allow numbers
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Boolean(l < r)),
-                (_, _) => Err(default_err),
+                _ => Err(default_err),
             },
             LessEqual => match (left_val, right_val) {
                 // only allow numbers
                 (Value::Number(l), Value::Number(r)) => Ok(Value::Boolean(l <= r)),
-                (_, _) => Err(default_err),
+                _ => Err(default_err),
             },
 
             _ => Err(default_err),
@@ -715,13 +735,13 @@ impl Interpreter {
     fn interpret_logical_expr(&mut self, left: &Expr, op: &Token, right: &Expr) -> Result<Value> {
         let left_val = self.interpret_expression(left)?;
 
-        if op.token_type == Or {
-            // if or and left is true: we return true
+        if matches!(op.token_type, Or | PipePipe) {
+            // if Or, and left is true: we return true
             if self.is_truthy(&left_val) {
                 return Ok(Value::Boolean(true));
             }
         } else {
-            // if And and left is false: we return false
+            // if And, and left is false: we return false
             if !self.is_truthy(&left_val) {
                 return Ok(Value::Boolean(false));
             }
@@ -729,6 +749,7 @@ impl Interpreter {
 
         // if none of that: we return the result of the right expr
         let right_val = self.interpret_expression(right)?;
+
         Ok(Value::Boolean(self.is_truthy(&right_val)))
     }
     fn interpret_list_expr(&mut self, list: &Vec<Expr>) -> Result<Value> {
@@ -796,7 +817,7 @@ impl Interpreter {
 
         Ok(list[index].to_owned())
     }
-    fn interpret_assign_expr(&mut self, target: &Expr, expr: &Expr) -> Result<Value> {
+    fn interpret_assign_expr(&mut self, target: &Expr, op: &Token, expr: &Expr) -> Result<Value> {
         let (target_token, indices_opt, err_tokens) = self.get_token_and_indices_val(target)?;
 
         let var_name = match target_token.token_type {
@@ -804,7 +825,16 @@ impl Interpreter {
             _ => panic!("ERROR"), // not possible
         };
 
-        let new_val = self.interpret_expression(expr)?;
+        let new_val = match op.token_type {
+            Equal | Be => self.interpret_expression(expr)?,
+
+            PlusEqual | MinusEqual | StarEqual | SlashEqual | ModulusEqual => {
+                // this function will apply the necessary operation
+                self.interpret_binary_expr(target, op, expr)?
+            }
+
+            _ => panic!("ERROR"),
+        };
 
         // update name only if the fun or the instance is owned (and not just a reference)
         if matches!(target, Expr::Variable(_)) {
@@ -829,6 +859,47 @@ impl Interpreter {
         )?;
 
         Ok(new_val)
+    }
+    fn interpret_range_expr(&mut self, left: &Expr, op: &Token, right: &Expr) -> Result<Value> {
+        let left_val = self.interpret_expression(left)?;
+        let right_val = self.interpret_expression(right)?;
+
+        let is_int = |num: f64| num.fract() == 0.0;
+
+        match (left_val, right_val) {
+            (Value::Number(num1), Value::Number(num2)) => {
+                if is_int(num1) && is_int(num2) {
+                    // if bad range
+                    if num2 < num1 {
+                        return Ok(Value::Range(0, 0));
+                    }
+
+                    match op.token_type {
+                        DotDot => return Ok(Value::Range(num1 as i64, num2 as i64)),
+                        DotDotEqual => return Ok(Value::Range(num1 as i64, num2 as i64 + 1)),
+
+                        _ => panic!("ERROR"),
+                    }
+                }
+
+                let problematic_num = if is_int(num1) { num2 } else { num1 };
+
+                Err(Error::new(
+                    ErrorKind::Exception(ExceptionKind::TypeError),
+                    format!(
+                        "Both ends of Range should be integers. Found `{}`.",
+                        problematic_num
+                    ),
+                    op,
+                ))
+            }
+
+            (l, r) => Err(Error::new(
+                ErrorKind::Exception(ExceptionKind::TypeError),
+                format!("Can't have a Range between a {:?} and {:?}.", l, r),
+                op,
+            )),
+        }
     }
     fn interpret_call_expr(
         &mut self,
@@ -1185,6 +1256,8 @@ impl Interpreter {
 
             Library::List(_) if matches!(target, Some(Value::List(_))) => true,
 
+            Library::Range(_) if matches!(target, Some(Value::Range(_, _))) => true,
+
             Library::Prelude(_) if target.is_none() => true,
 
             _ => false,
@@ -1196,6 +1269,8 @@ impl Interpreter {
             Library::String(string_lib) => string_lib.get_function(property_name),
 
             Library::List(list_lib) => list_lib.get_function(property_name),
+
+            Library::Range(range_lib) => range_lib.get_function(property_name),
 
             Library::Prelude(prlelude_lib) => prlelude_lib.get_function(property_name),
         };

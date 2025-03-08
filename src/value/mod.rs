@@ -17,6 +17,7 @@ pub enum Value {
     String(String),
     Boolean(bool),
     List(Rc<RefCell<Vec<Value>>>),
+    Range(i64, i64),
     Type(String),
     Class(Rc<RefCell<SigmaClass>>),
     Instance(Rc<RefCell<SigmaInstance>>),
@@ -39,6 +40,7 @@ impl Clone for Value {
             Value::Number(num) => Value::Number(*num),
             Value::Boolean(bool) => Value::Boolean(*bool),
             Value::String(str) => Value::String(str.clone()),
+            Value::Range(num1, num2) => Value::Range(*num1, *num2),
             Value::Exception(str) => Value::Exception(str.clone()),
             Value::Type(str) => Value::Type(str.clone()),
 
@@ -52,6 +54,7 @@ impl fmt::Display for Value {
         let val = match self {
             Self::Number(num) => num.to_string(),
             Self::String(str) => str.to_string(),
+            Self::Range(num1, num2) => format!("{}..{}", num1, num2),
             Self::Boolean(bool) => bool.to_string(),
             Self::List(list_rc) => {
                 let list = list_rc.borrow();
@@ -87,6 +90,7 @@ impl fmt::Debug for Value {
         let str = match self {
             Self::Number(_) => "Number",
             Self::String(_) => "String",
+            Self::Range(_, _) => "Range",
             Self::Boolean(_) => "Boolean",
             Self::List(_) => "List",
             Self::Class(class_rc) => &class_rc.borrow().to_string(),

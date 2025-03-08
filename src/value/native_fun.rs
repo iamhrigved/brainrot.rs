@@ -19,12 +19,12 @@ impl std::fmt::Display for NativeFun {
 
 impl NativeFun {
     pub fn new(
-        name: String,
+        name: &str,
         arity: (usize, Option<usize>),
         call_fun: fn(Vec<Value>, &Token) -> Result<Value>,
     ) -> Self {
         Self {
-            name,
+            name: name.to_owned(),
             self_val: None,
             arity,
             call_fun,

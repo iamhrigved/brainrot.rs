@@ -196,10 +196,16 @@ impl SigmaFun {
         let mut fun_ret = Value::Nil;
 
         // if the function returns
-        if let Some(ControlFlow::Return(val)) =
-            interpreter.interpret_statement(self.fun_body.as_ref().unwrap())?
-        {
-            fun_ret = val;
+        match self.fun_body.as_ref().unwrap() {
+            // if the statement is an expression, return the value
+            Stmt::Expression(expr) => fun_ret = interpreter.interpret_expression(expr)?,
+
+            // if any other stmt, normal function execution
+            stmt => {
+                if let Some(ControlFlow::Return(val)) = interpreter.interpret_statement(stmt)? {
+                    fun_ret = val;
+                }
+            }
         }
 
         self.captured_environment = old_env_opt;

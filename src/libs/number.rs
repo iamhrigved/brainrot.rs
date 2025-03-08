@@ -37,13 +37,14 @@ impl NumberLib {
     #[rustfmt::skip]
     fn match_function(&self, fun_name: &String) -> Option<NativeFun> {
         let fun = match &**fun_name {
-            "round" => NativeFun::new("round".to_string(), (0, Some(0)), Self::round),
-            "floor" => NativeFun::new("floor".to_string(), (0, Some(0)), Self::floor),
-            "ceil" => NativeFun::new("ceil".to_string(), (0, Some(0)), Self::ceil),
-            "trunc" => NativeFun::new("trunc".to_string(), (0, Some(0)), Self::trunc),
-            "abs" => NativeFun::new("abs".to_string(), (0, Some(0)), Self::abs),
-            "sqrt" => NativeFun::new("sqrt".to_string(), (0, Some(0)), Self::sqrt),
-            "pow" => NativeFun::new("pow".to_string(), (1, Some(1)), Self::pow),
+            "round" => NativeFun::new("round", (0, Some(0)), Self::round),
+            "floor" => NativeFun::new("floor", (0, Some(0)), Self::floor),
+            "ceil" => NativeFun::new("ceil", (0, Some(0)), Self::ceil),
+            "trunc" => NativeFun::new("trunc", (0, Some(0)), Self::trunc),
+            "abs" => NativeFun::new("abs", (0, Some(0)), Self::abs),
+            "sqrt" => NativeFun::new("sqrt", (0, Some(0)), Self::sqrt),
+            "pow" => NativeFun::new("pow", (1, Some(1)), Self::pow),
+            "to_string" => NativeFun::new("to_string", (0, Some(0)), Self::to_string),
 
             _ => return None,
         }; 
@@ -131,4 +132,12 @@ impl NumberLib {
     //        )),
     //    }
     //}
+    fn to_string(args_val: Vec<Value>, _err_token: &Token) -> Result<Value> {
+        match args_val[0] {
+            Value::Number(num) => Ok(Value::String(num.to_string())),
+
+            _ => unreachable!(),
+        }
+    }
+
 }

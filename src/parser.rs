@@ -16,16 +16,17 @@ pub enum Expr {
     Binary(Box<Expr>, Token, Box<Expr>),
     Logical(Box<Expr>, Token, Box<Expr>),
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
-    Call(Box<Expr>, Vec<Expr>, Token), // expr, args and variable token (if available) for error
-    Get(Box<Expr>, Token),             // target, field
-    Set(Box<Expr>, Token, Box<Expr>),  // target, field, expression
+    Range(Box<Expr>, Token, Box<Expr>), // expr..expr
+    Call(Box<Expr>, Vec<Expr>, Token),  // expr, args and variable token (if available) for error
+    Get(Box<Expr>, Token),              // target, field
+    Set(Box<Expr>, Token, Box<Expr>),   // target, field, expression
     Closure(Vec<String>, Vec<(String, Expr)>, bool, Box<Stmt>),
     Literal(Value),
     Group(Box<Expr>),
     Variable(Token),                    // name
     Index(Box<Expr>, Box<Expr>, Token), // object, index and RightBracket for error
     List(Vec<Expr>),
-    Assign(Box<Expr>, Box<Expr>), // variable and expression
+    Assign(Box<Expr>, Token, Box<Expr>), // variable, operator, and expression
 }
 
 impl std::fmt::Display for Expr {
@@ -42,6 +43,7 @@ impl std::fmt::Display for Expr {
             Self::Ternary(cond, then_branch, else_branch) => {
                 format!("{} ? {} : {}", cond, then_branch, else_branch)
             }
+            Self::Range(l, _, r) => format!("{}..{}", l, r),
             Self::Call(expr, args, _) => {
                 let mut args_string = String::new();
 
@@ -58,7 +60,6 @@ impl std::fmt::Display for Expr {
             }
             Self::Get(expr, field) => format!("{}.{}", expr, field),
             Self::Set(expr, field, value) => format!("{}.{} = {}", expr, field, value),
-            //Self::Me(me_tok) => me_tok.to_string(),
             Self::Closure(args, default_args, has_varargs, _) => {
                 let mut args_string = String::new();
 
@@ -94,7 +95,7 @@ impl std::fmt::Display for Expr {
 
                 format!("[{}]", list_string)
             }
-            Self::Assign(target, expr) => format!("{} = {}", target, expr), // variable and expression
+            Self::Assign(target, op, expr) => format!("{} {} {}", target, op, expr), // variable and expression
         };
 
         write!(f, "{}", print_string)
@@ -520,7 +521,6 @@ impl<'a> Parser<'a> {
 
     fn for_in_statement(&mut self, for_token: Token) -> Result<Stmt> {
         let cur_token = self.consume_token();
-        println!("cur_token: {}", cur_token);
         let var_name = match cur_token.token_type {
             Identifier(name) => name,
 
@@ -675,14 +675,22 @@ impl<'a> Parser<'a> {
     }
 
     fn assignment(&mut self) -> Result<Expr> {
-        let expr = self.logical_or()?;
+        let expr = self.range()?;
 
-        if let Some(eq) = self.match_next(&[Equal, Be]) {
+        if let Some(op) = self.match_next(&[
+            Equal,
+            Be,
+            PlusEqual,
+            MinusEqual,
+            StarEqual,
+            SlashEqual,
+            ModulusEqual,
+        ]) {
             let value = self.assignment()?;
 
             match expr {
                 Expr::Variable(_) | Expr::Index(_, _, _) => {
-                    return Ok(Expr::Assign(Box::new(expr), Box::new(value)))
+                    return Ok(Expr::Assign(Box::new(expr), op, Box::new(value)))
                 }
 
                 Expr::Get(target, field) => return Ok(Expr::Set(target, field, Box::new(value))),
@@ -691,7 +699,7 @@ impl<'a> Parser<'a> {
                     return Err(Error::new(
                         ErrorKind::Exception(ExceptionKind::TypeError),
                         "Can't assign to an expression.".to_string(),
-                        &eq,
+                        &op,
                     ))
                 }
             }
@@ -700,10 +708,22 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
+    fn range(&mut self) -> Result<Expr> {
+        let mut expr = self.logical_or()?;
+
+        if let Some(token) = self.match_next(&[DotDot, DotDotEqual]) {
+            let right = self.logical_or()?;
+
+            expr = Expr::Range(Box::new(expr), token, Box::new(right));
+        }
+
+        Ok(expr)
+    }
+
     fn logical_or(&mut self) -> Result<Expr> {
         let mut expr = self.logical_and()?;
 
-        if let Some(token) = self.match_next(&[Or]) {
+        if let Some(token) = self.match_next(&[Or, PipePipe]) {
             let right = self.logical_and()?;
 
             expr = Expr::Logical(Box::new(expr), token, Box::new(right));
@@ -715,7 +735,7 @@ impl<'a> Parser<'a> {
     fn logical_and(&mut self) -> Result<Expr> {
         let mut expr = self.ternary()?;
 
-        if let Some(token) = self.match_next(&[And]) {
+        if let Some(token) = self.match_next(&[And, AndAnd]) {
             let right = self.ternary()?;
 
             expr = Expr::Logical(Box::new(expr), token, Box::new(right))
@@ -992,7 +1012,7 @@ impl<'a> Parser<'a> {
 
             ref tt if matches!(tt, Catch | FindOut) => Err(Error::new(
                 ErrorKind::Fatal(SyntaxError),
-                "Can't use `tt` without an associated `try` block.".to_string(),
+                format!("Can't use `{}` without an associated `try` block.", tt),
                 &cur_token,
             )),
 
@@ -1052,40 +1072,71 @@ impl<'a> Parser<'a> {
                 | Star
         )
     }
+    /*
+       1. normal function:
+           fun name(a, b, c = 1) { /* */ } --> c has a default param
+
+       2. normal closure:
+           fun (a, b, c ...) { /* */ } --> c is the vararg list
+
+       3. shorthand closure:
+           fun (a, b, c): a + b + c --> returns a + b + c
+                       AND
+           fun a: a * 2 --> parenthesis for single param not required
+    */
 
     fn finish_fun(
         &mut self,
         is_closure: bool,
     ) -> Result<(Vec<String>, Vec<(String, Expr)>, bool, Stmt)> {
-        if self.match_next(&[LeftParen]).is_none() {
-            let mut err_msg = "Expected `(` after function name.";
+        let mut single_param = false;
 
-            if is_closure {
-                err_msg = "Expected `(` after `fun`."
+        if self.match_next(&[LeftParen]).is_none() {
+            // if the function is not a closure
+            if !is_closure {
+                return Err(Error::new(
+                    ErrorKind::Fatal(SyntaxError),
+                    "Expected `(` after function name.".to_string(),
+                    &self.cur_token,
+                ));
             }
-            return Err(Error::new(
-                ErrorKind::Fatal(SyntaxError),
-                err_msg.to_string(),
-                &self.cur_token,
-            ));
+            // if the function is a closure
+            else {
+                single_param = true;
+            }
         }
 
         let mut params = Vec::new();
         let mut default_params = Vec::new();
         let mut has_varargs = false;
 
-        if self.match_next(&[RightParen]).is_some() {
+        if self.match_next(&[RightParen]).is_some() && !single_param {
             let stmt = self.statement()?;
             return Ok((params, default_params, has_varargs, stmt));
         }
 
-        loop {
+        if single_param {
+            let var_token = self.consume_token();
+
+            let Identifier(var_name) = var_token.token_type else {
+                return Err(Error::new(
+                    ErrorKind::Fatal(ParseError),
+                    format!("Expected parameter name. Found `{}`.", var_token),
+                    &var_token,
+                ));
+            };
+
+            params.push(var_name);
+        }
+
+        #[allow(clippy::while_immutable_condition)]
+        while !single_param {
             let var_token = self.consume_token();
 
             if !matches!(var_token.token_type, Identifier(_)) {
                 return Err(Error::new(
                     ErrorKind::Fatal(ParseError),
-                    "Expected parameter name.".to_string(),
+                    format!("Expected parameter name. Found `{}`.", var_token),
                     &var_token,
                 ));
             }
@@ -1150,15 +1201,62 @@ impl<'a> Parser<'a> {
             }
         }
 
-        if self.match_next(&[RightParen]).is_none() {
+        if self.match_next(&[RightParen]).is_none() && !single_param {
             return Err(Error::new(
                 ErrorKind::Fatal(SyntaxError),
-                "Expected `)` after function parameters.".to_string(),
+                format!(
+                    "Expected `)` after function parameters. Found `{}`.",
+                    self.cur_token
+                ),
                 &self.cur_token,
             ));
         }
 
-        let stmt = self.statement()?;
+        match &self.cur_token {
+            // skip if leftbrace
+            tok if matches!(tok.token_type, LeftBrace) => (),
+
+            // if colon
+            tok if matches!(tok.token_type, Colon) => {
+                self.consume_token(); // consume the colon
+
+                // token after colon can't be leftbrace
+                if matches!(self.cur_token.token_type, LeftBrace) {
+                    return Err(Error::new(
+                        ErrorKind::Fatal(SyntaxError),
+                        "Block statement is not allowed in shorthand `:` syntax.".to_string(),
+                        &self.cur_token,
+                    ));
+                }
+            }
+
+            // if anything else
+            tok => {
+                return Err(Error::new(
+                    ErrorKind::Fatal(SyntaxError),
+                    format!(
+                        "Expected `{{` or `:` after parameter list. Found `{}`.",
+                        tok
+                    ),
+                    tok,
+                ))
+            }
+        }
+
+        let stmt = if matches!(self.cur_token.token_type, LeftBrace) {
+            if single_param {
+                return Err(Error::new(
+                    ErrorKind::Fatal(SyntaxError),
+                    "Block statement is not allowed. Please use parenthesis around the parameter name.".to_string(),
+                    &self.cur_token
+                ));
+            }
+
+            self.statement()?
+        } else {
+            // if NOT leftbrace, then an expression will be expected
+            Stmt::Expression(self.expression()?)
+        };
 
         Ok((params, default_params, has_varargs, stmt))
     }

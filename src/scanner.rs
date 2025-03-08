@@ -56,14 +56,15 @@ impl<'a> Scanner<'a> {
 
         // Types
         insert(TypeLiteral("Number".to_string()));
-        insert(TypeLiteral("Number".to_string()));
+        insert(TypeLiteral("Num".to_string()));
         insert(TypeLiteral("String".to_string()));
-        insert(TypeLiteral("String".to_string()));
+        insert(TypeLiteral("Str".to_string()));
         insert(TypeLiteral("Boolean".to_string()));
-        insert(TypeLiteral("Boolean".to_string()));
+        insert(TypeLiteral("Bool".to_string()));
         insert(TypeLiteral("List".to_string()));
         insert(TypeLiteral("Function".to_string()));
-        insert(TypeLiteral("Function".to_string()));
+        insert(TypeLiteral("Fun".to_string()));
+        insert(TypeLiteral("Range".to_string()));
 
         // Error
         insert(TokenType::Error);
@@ -144,7 +145,6 @@ impl<'a> Scanner<'a> {
             '}' => Ok(RightBrace),
             ',' => Ok(Comma),
             '?' => Ok(Question),
-            '%' => Ok(Modulus),
             ':' => Ok(Colon),
             ';' => Ok(Semicolon),
 
@@ -152,6 +152,8 @@ impl<'a> Scanner<'a> {
             '+' => {
                 if self.match_next_char('+') {
                     Ok(PlusPlus)
+                } else if self.match_next_char('=') {
+                    Ok(PlusEqual)
                 } else {
                     Ok(Plus)
                 }
@@ -159,6 +161,8 @@ impl<'a> Scanner<'a> {
             '-' => {
                 if self.match_next_char('-') {
                     Ok(MinusMinus)
+                } else if self.match_next_char('=') {
+                    Ok(MinusEqual)
                 } else {
                     Ok(Minus)
                 }
@@ -166,6 +170,8 @@ impl<'a> Scanner<'a> {
             '*' => {
                 if self.match_next_char('*') {
                     Ok(StarStar)
+                } else if self.match_next_char('=') {
+                    Ok(StarEqual)
                 } else {
                     Ok(Star)
                 }
@@ -173,8 +179,17 @@ impl<'a> Scanner<'a> {
             '/' => {
                 if self.match_next_char('/') {
                     Ok(SlashSlash)
+                } else if self.match_next_char('=') {
+                    Ok(SlashEqual)
                 } else {
                     Ok(Slash)
+                }
+            }
+            '%' => {
+                if self.match_next_char('=') {
+                    Ok(ModulusEqual)
+                } else {
+                    Ok(Modulus)
                 }
             }
             '!' => {
@@ -207,18 +222,8 @@ impl<'a> Scanner<'a> {
             }
 
             // Logical Operaters
-            '|' if self.match_next_char('|') => Err(Error::new_without_token(
-                ErrorKind::Fatal(UnexpectedToken),
-                "Please use `or` instead of `||`.".to_string(),
-                (self.linenum, self.token_start_colnum),
-                2,
-            )),
-            '&' if self.match_next_char('&') => Err(Error::new_without_token(
-                ErrorKind::Fatal(UnexpectedToken),
-                "Please use `and` instead of `&&`.".to_string(),
-                (self.linenum, self.token_start_colnum),
-                2,
-            )),
+            '&' if self.match_next_char('&') => Ok(AndAnd),
+            '|' if self.match_next_char('|') => Ok(PipePipe),
 
             // Comments
             '#' => {
@@ -235,14 +240,11 @@ impl<'a> Scanner<'a> {
             '.' => {
                 if self.match_next_char('.') {
                     if self.match_next_char('.') {
-                        return Ok(Varargs);
+                        Ok(Varargs)
+                    } else if self.match_next_char('=') {
+                        Ok(DotDotEqual)
                     } else {
-                        Err(Error::new_without_token(
-                            ErrorKind::Fatal(UnexpectedToken),
-                            "Probably you meant `...`.".to_string(),
-                            (self.linenum, self.token_start_colnum),
-                            2,
-                        ))
+                        Ok(DotDot)
                     }
                 } else {
                     Ok(Dot)

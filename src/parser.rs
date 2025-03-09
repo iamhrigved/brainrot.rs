@@ -20,6 +20,7 @@ pub enum Expr {
     Call(Box<Expr>, Vec<Expr>, Token),  // expr, args and variable token (if available) for error
     Get(Box<Expr>, Token),              // target, field
     Set(Box<Expr>, Token, Box<Expr>),   // target, field, expression
+    ClassGet(Box<Expr>, Token),         // target class, field
     Closure(Vec<String>, Vec<(String, Expr)>, bool, Box<Stmt>),
     Literal(Value),
     Group(Box<Expr>),
@@ -60,6 +61,7 @@ impl std::fmt::Display for Expr {
             }
             Self::Get(expr, field) => format!("{}.{}", expr, field),
             Self::Set(expr, field, value) => format!("{}.{} = {}", expr, field, value),
+            Self::ClassGet(expr, field) => format!("{}::{}", expr, field),
             Self::Closure(args, default_args, has_varargs, _) => {
                 let mut args_string = String::new();
 
@@ -217,6 +219,7 @@ impl<'a> Parser<'a> {
         while !matches!(self.cur_token.token_type, RightBrace | Eof) {
             let decl = match self.cur_token.token_type {
                 Let | Lit => self.var_declaration()?,
+
                 Meth => {
                     self.consume_token(); // consume the `meth`
 
@@ -233,16 +236,25 @@ impl<'a> Parser<'a> {
                         }
                     };
 
-                    let (params, default_params, has_varargs, stmt) = self.finish_fun(true)?;
+                    let (params, default_params, has_varargs, body) = self.finish_fun(true)?;
 
                     Stmt::FunDecl(
                         Some(meth_name),
                         params,
                         default_params,
                         has_varargs,
-                        Box::new(stmt),
+                        Box::new(body),
                     )
                 }
+
+                Fun => {
+                    return Err(Error::new(
+                        ErrorKind::Fatal(SyntaxError),
+                        "Please use the `meth` keyword for method declarations.".to_string(),
+                        &self.cur_token,
+                    ))
+                }
+
                 _ => {
                     return Err(Error::new(
                         ErrorKind::Fatal(SyntaxError),
@@ -258,7 +270,6 @@ impl<'a> Parser<'a> {
             stmts.push(decl);
         }
 
-        // TODO: IMPROVE PARSING OF CLASS STATEMENTS
         self.consume_token();
 
         if self.cur_token.token_type == Eof {
@@ -905,7 +916,7 @@ impl<'a> Parser<'a> {
                 Dot => {
                     self.consume_token();
 
-                    let field = match self.cur_token.token_type {
+                    let property = match self.cur_token.token_type {
                         Identifier(_) => self.consume_token(),
                         _ => {
                             return Err(Error::new(
@@ -919,7 +930,28 @@ impl<'a> Parser<'a> {
                         }
                     };
 
-                    expr = Expr::Get(Box::new(expr), field);
+                    expr = Expr::Get(Box::new(expr), property);
+                }
+
+                // class get
+                ColonColon => {
+                    self.consume_token();
+
+                    let property = match self.cur_token.token_type {
+                        Identifier(_) => self.consume_token(),
+                        _ => {
+                            return Err(Error::new(
+                                ErrorKind::Fatal(SyntaxError),
+                                format!(
+                                    "Expected field name after `.`. Found `{}`.",
+                                    self.cur_token
+                                ),
+                                &self.cur_token,
+                            ))
+                        }
+                    };
+
+                    expr = Expr::ClassGet(Box::new(expr), property);
                 }
 
                 _ => break,

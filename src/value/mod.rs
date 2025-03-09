@@ -12,6 +12,7 @@ use sigma_class::SigmaClass;
 use sigma_fun::SigmaFun;
 use sigma_instance::SigmaInstance;
 
+// only List and Instance require RefCell<T>
 pub enum Value {
     Number(f64),
     String(String),
@@ -19,11 +20,11 @@ pub enum Value {
     List(Rc<RefCell<Vec<Value>>>),
     Range(i64, i64),
     Type(String),
-    Class(Rc<RefCell<SigmaClass>>),
+    Class(Rc<SigmaClass>),
     Instance(Rc<RefCell<SigmaInstance>>),
     Exception(String),
-    Function(Rc<RefCell<SigmaFun>>),
-    LibFunction(Rc<RefCell<NativeFun>>),
+    Function(Rc<SigmaFun>),
+    LibFunction(Option<Box<Value>>, Rc<NativeFun>), // self and function
     Nil,
 }
 
@@ -32,10 +33,45 @@ impl Clone for Value {
         match self {
             // if the value is an Rc, return the cloned Rc
             Value::List(list_rc) => Value::List(Rc::clone(list_rc)),
-            Value::Function(fun_rc) => Value::Function(Rc::clone(fun_rc)),
-            Value::LibFunction(lib_fun_rc) => Value::LibFunction(Rc::clone(lib_fun_rc)),
-            Value::Class(class_rc) => Value::Class(Rc::clone(class_rc)),
             Value::Instance(instance_rc) => Value::Instance(Rc::clone(instance_rc)),
+
+            Value::Function(fun_rc) => Value::Function(Rc::clone(fun_rc)),
+            Value::LibFunction(self_val, lib_fun_rc) => {
+                Value::LibFunction(self_val.clone(), Rc::clone(lib_fun_rc))
+            }
+            Value::Class(class_rc) => Value::Class(Rc::clone(class_rc)),
+
+            Value::Number(num) => Value::Number(*num),
+            Value::Boolean(bool) => Value::Boolean(*bool),
+            Value::String(str) => Value::String(str.clone()),
+            Value::Range(num1, num2) => Value::Range(*num1, *num2),
+            Value::Exception(str) => Value::Exception(str.clone()),
+            Value::Type(str) => Value::Type(str.clone()),
+
+            Value::Nil => Value::Nil,
+        }
+    }
+}
+
+// for SigmaClass::clone(&self)
+impl Value {
+    pub fn deep_clone(&self) -> Self {
+        match self {
+            Value::List(list_rc) => Value::List(Rc::new(RefCell::new(list_rc.borrow().clone()))),
+            Value::Instance(instance_rc) => {
+                Value::Instance(Rc::new(RefCell::new(instance_rc.borrow().clone())))
+            }
+
+            Value::Function(fun_rc) => Value::Function(Rc::new(fun_rc.as_ref().clone())),
+            Value::Class(class_rc) => Value::Class(Rc::new(class_rc.as_ref().clone())),
+            Value::LibFunction(self_opt, lib_fun_rc) => Value::LibFunction(
+                // deep clone the self value
+                self_opt
+                    .as_ref()
+                    .map(|self_val| Box::new(self_val.deep_clone())),
+                // never deep clone a lib function
+                Rc::clone(lib_fun_rc),
+            ),
 
             Value::Number(num) => Value::Number(*num),
             Value::Boolean(bool) => Value::Boolean(*bool),
@@ -59,26 +95,29 @@ impl fmt::Display for Value {
             Self::List(list_rc) => {
                 let list = list_rc.borrow();
 
+                if list.is_empty() {
+                    return write!(f, "[]");
+                }
+
                 let mut print_string = "[".to_string();
 
-                for item in list.iter() {
+                // leave the last item
+                for item in list.iter().take(list.len() - 1) {
                     print_string.push_str(&format!("{}, ", item));
                 }
 
-                if !list.is_empty() {
-                    print_string.pop();
-                    print_string.pop();
-                }
-                print_string.push(']');
+                let last_item = list.last().unwrap();
+
+                print_string += &format!("{}]", last_item);
 
                 print_string
             }
             Self::Type(type_name) => format!("Type <{}>", type_name),
             Self::Instance(instance_rc) => instance_rc.borrow().to_string(),
-            Self::Class(class_rc) => class_rc.borrow().to_string(),
+            Self::Class(class_rc) => class_rc.as_ref().to_string(),
             Self::Exception(exception_message) => exception_message.to_string(),
-            Self::Function(sigma_fun) => sigma_fun.borrow().to_string(),
-            Self::LibFunction(lib_fun) => lib_fun.borrow().to_string(),
+            Self::Function(sigma_fun) => sigma_fun.as_ref().to_string(),
+            Self::LibFunction(_, lib_fun) => lib_fun.as_ref().to_string(),
             Self::Nil => "Nil".to_string(),
         };
         write!(f, "{}", val)
@@ -93,10 +132,10 @@ impl fmt::Debug for Value {
             Self::Range(_, _) => "Range",
             Self::Boolean(_) => "Boolean",
             Self::List(_) => "List",
-            Self::Class(class_rc) => &class_rc.borrow().to_string(),
+            Self::Class(class_rc) => &class_rc.as_ref().to_string(),
             Self::Instance(instance_rc) => &instance_rc.borrow().to_string(),
             Self::Function(_) => "Function",
-            Self::LibFunction(_) => "NativeFunction",
+            Self::LibFunction(_, _) => "NativeFunction",
             Self::Exception(_) => "Exception",
             Self::Type(_) => &self.to_string(), // Type <Number>
             Self::Nil => "Nil",

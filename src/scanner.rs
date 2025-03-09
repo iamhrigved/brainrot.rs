@@ -145,7 +145,6 @@ impl<'a> Scanner<'a> {
             '}' => Ok(RightBrace),
             ',' => Ok(Comma),
             '?' => Ok(Question),
-            ':' => Ok(Colon),
             ';' => Ok(Semicolon),
 
             // Double character lexemes
@@ -218,6 +217,13 @@ impl<'a> Scanner<'a> {
                     Ok(GreaterEqual)
                 } else {
                     Ok(Greater)
+                }
+            }
+            ':' => {
+                if self.match_next_char(':') {
+                    Ok(ColonColon)
+                } else {
+                    Ok(Colon)
                 }
             }
 

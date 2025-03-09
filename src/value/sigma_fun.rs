@@ -2,16 +2,15 @@ use super::*;
 use crate::environment::Environment;
 use crate::error::Error;
 use crate::interpreter::{ControlFlow, Interpreter};
-use crate::parser::{Expr, Stmt};
+use crate::parser::Stmt;
 
 type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Clone)]
 pub struct SigmaFun {
     pub name: Option<String>,
-    captured_environment: Option<Rc<RefCell<Environment>>>,
+    pub captured_environment: Rc<RefCell<Environment>>,
     params: Vec<String>,
-    default_params: Vec<(String, Expr)>,
+    default_params: Vec<(String, Value)>,
     fun_body: Option<Stmt>,
     pub arity: (usize, Option<usize>), // minimum and maximum arity
 }
@@ -25,8 +24,8 @@ impl std::fmt::Display for SigmaFun {
 
         let mut args_string = "(".to_string();
 
-        if self.params.is_empty() {
-            return write!(f, "<Fun {}()>", fun_name);
+        if self.params.is_empty() && self.default_params.is_empty() {
+            return write!(f, "Fun {}()", fun_name);
         }
 
         for param in &self.params {
@@ -43,24 +42,43 @@ impl std::fmt::Display for SigmaFun {
         }
         args_string.push(')');
 
-        write!(f, "<Fun {}{}>", fun_name, args_string)
+        write!(f, "Fun {}{}", fun_name, args_string)
+    }
+}
+
+// for Value::deep_clone(&self)
+impl Clone for SigmaFun {
+    fn clone(&self) -> Self {
+        let env = self.captured_environment.borrow();
+        let env_clone_rc = Rc::new(RefCell::new(env.clone()));
+
+        Self {
+            name: self.name.clone(),
+            captured_environment: env_clone_rc,
+            params: self.params.clone(),
+            default_params: self.default_params.clone(),
+            fun_body: self.fun_body.clone(),
+            arity: self.arity,
+        }
     }
 }
 
 impl SigmaFun {
-    pub fn new_user_defined(
-        declaration: Box<Stmt>,
+    // takes the interpreter to interpret the default Expr inside the function declaration
+    pub fn new(
+        declaration: Stmt,
         captured_environment: Rc<RefCell<Environment>>,
-    ) -> Self {
+        interpreter: &mut Interpreter,
+    ) -> Result<Self> {
         let (
-            fun_name,
+            name,
             mut minimum_arity,
             mut maximum_arity,
             params,
-            default_params,
+            default_params_expr,
             has_varargs,
             fun_body,
-        ) = match *declaration {
+        ) = match declaration {
             Stmt::FunDecl(name_opt, params, default_params, has_varargs, body) => (
                 name_opt,
                 params.len(),
@@ -80,69 +98,24 @@ impl SigmaFun {
             minimum_arity -= 1;
             maximum_arity = None;
         }
-        Self {
-            name: fun_name,
-            captured_environment: Some(captured_environment),
+
+        let mut default_params = Vec::with_capacity(default_params_expr.len());
+        for (name, expr) in default_params_expr {
+            default_params.push((name, interpreter.interpret_expression(&expr)?))
+        }
+
+        Ok(Self {
+            name,
+            captured_environment,
             params,
             default_params,
             fun_body: Some(fun_body),
             arity: (minimum_arity, maximum_arity),
-        }
-    }
-    pub fn new_method(declaration: Box<Stmt>) -> Self {
-        let (
-            name_opt,
-            mut minimum_arity,
-            mut maximum_arity,
-            params,
-            default_params,
-            has_varargs,
-            fun_body,
-        ) = match *declaration {
-            Stmt::FunDecl(name_opt, params, default_params, has_varargs, body) => (
-                name_opt,
-                params.len(),
-                Some(params.len() + default_params.len()),
-                params,
-                default_params,
-                has_varargs,
-                *body,
-            ),
-            _ => panic!("ERROR"),
-        };
-
-        // don't count the last param in the arity because it is optional
-        // if there are varargs, the maximum arity will be None
-        if has_varargs {
-            minimum_arity -= 1;
-            maximum_arity = None;
-        }
-        Self {
-            name: name_opt,
-            captured_environment: None,
-            params,
-            default_params,
-            fun_body: Some(fun_body),
-            arity: (minimum_arity, maximum_arity),
-        }
+        })
     }
 
-    pub fn update_name(&mut self, name: String) {
-        self.name = Some(name)
-    }
-
-    pub fn update_environment(&mut self, environment: Rc<RefCell<Environment>>) {
-        self.captured_environment = Some(environment)
-    }
-
-    pub fn call(&mut self, args_val: Vec<Value>) -> Result<Value> {
-        let old_env_opt = self.captured_environment.as_ref().map(Rc::clone);
-
-        let mut interpreter = match &old_env_opt {
-            Some(env_rc) => Interpreter::from(Rc::clone(env_rc)),
-
-            None => Interpreter::new(),
-        };
+    pub fn call(&self, args_val: Vec<Value>) -> Result<Value> {
+        let mut interpreter = Interpreter::from(Rc::clone(&self.captured_environment));
 
         // create a new local environment for the function body inside the captured environment
         let old_env = Rc::clone(&interpreter.environment);
@@ -163,14 +136,14 @@ impl SigmaFun {
         }
 
         // manage default parameters
-        for (param, expr) in &self.default_params {
+        for (param, default_val) in &self.default_params {
             let final_val: Value;
 
             // if there is a passed argument, take it or else evaluate the expr
             if let Some(val) = args_val.get(cur_arg_index) {
                 final_val = val.clone();
             } else {
-                final_val = interpreter.interpret_expression(expr)?;
+                final_val = default_val.clone();
             }
 
             interpreter
@@ -207,8 +180,6 @@ impl SigmaFun {
                 }
             }
         }
-
-        self.captured_environment = old_env_opt;
 
         Ok(fun_ret)
     }

@@ -35,6 +35,7 @@ pub enum TokenType {
     PipePipe,
     Question,
     Colon,
+    ColonColon,
     Semicolon,
 
     // Comparison operators
@@ -139,6 +140,7 @@ impl std::fmt::Display for TokenType {
             Self::PipePipe => "||",
             Self::Question => "?",
             Self::Colon => ":",
+            Self::ColonColon => "::",
 
             // Comparison
             Self::Bang => "!",

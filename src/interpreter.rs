@@ -8,7 +8,7 @@ use std::string::String;
 
 use crate::environment::Environment;
 use crate::error::{Error, ErrorKind, ExceptionKind, FatalKind::*};
-use crate::libs::Library;
+use crate::libs::{Library, NativeLib};
 use crate::parser::{Expr, Stmt};
 use crate::token::{Token, TokenType, TokenType::*};
 use crate::value::native_fun::NativeFun;
@@ -98,6 +98,9 @@ impl Interpreter {
     ) -> Result<Option<ControlFlow>> {
         let mut properties = HashMap::with_capacity(8);
 
+        // new environment for methods
+        let new_env = Environment::new();
+
         for decl in declarations {
             match decl {
                 Stmt::VarDecl(name, expr_opt) => {
@@ -111,9 +114,9 @@ impl Interpreter {
                 }
 
                 Stmt::FunDecl(Some(name), _, _, _, _) => {
-                    let fun = SigmaFun::new_method(Box::new(decl.clone()));
+                    let fun = SigmaFun::new(decl.clone(), Rc::clone(&new_env), self)?;
 
-                    let fun_rc = Rc::new(RefCell::new(fun));
+                    let fun_rc = Rc::new(fun);
 
                     properties.insert(name.to_owned(), Value::Function(fun_rc));
                 }
@@ -123,7 +126,12 @@ impl Interpreter {
         }
 
         let class = SigmaClass::new(name.to_owned(), properties);
-        let class_rc = Rc::new(RefCell::new(class));
+        let class_rc = Rc::new(class);
+
+        // define `Self` type in the method environment (we have the RefCell mutable access)
+        let mut env_mut = new_env.borrow_mut();
+        env_mut.define_var("Self".to_string(), Some(Value::Class(Rc::clone(&class_rc))));
+        env_mut.define_var(name.to_string(), Some(Value::Class(Rc::clone(&class_rc))));
 
         self.environment
             .borrow_mut()
@@ -138,12 +146,11 @@ impl Interpreter {
             _ => panic!("ERROR"), // not possible
         };
 
-        let fun =
-            SigmaFun::new_user_defined(Box::new(declaration.clone()), Rc::clone(&self.environment));
+        let fun = SigmaFun::new(declaration.to_owned(), Rc::clone(&self.environment), self)?;
 
         self.environment
             .borrow_mut()
-            .define_var(name, Some(Value::Function(Rc::new(RefCell::new(fun)))));
+            .define_var(name, Some(Value::Function(Rc::new(fun))));
 
         Ok(None)
     }
@@ -158,16 +165,11 @@ impl Interpreter {
             val_opt = Some(self.interpret_expression(expr)?);
         }
 
-        // update name only if the fun or the instance is owned (and not just a reference)
+        // update name only if the instance is owned (and not just a reference)
         match &val_opt {
             Some(Value::Instance(instance_rc)) if Rc::strong_count(instance_rc) == 1 => {
                 instance_rc.borrow_mut().update_name(name.to_owned())
             }
-
-            Some(Value::Function(fun_rc)) if Rc::strong_count(fun_rc) == 1 => {
-                fun_rc.borrow_mut().update_name(name.to_owned())
-            }
-
             _ => (),
         }
 
@@ -472,6 +474,9 @@ impl Interpreter {
             }
             Expr::Closure(_, _, _, _) => self.interpret_closure_expr(expr),
             Expr::Get(target, property) => self.interpret_get_expr(target.as_ref(), property),
+            Expr::ClassGet(target, property) => {
+                self.interpret_class_get_expr(target.as_ref(), property)
+            }
             Expr::Set(target, property, expr) => {
                 self.interpret_set_expr(target.as_ref(), property, expr.as_ref())
             }
@@ -836,17 +841,12 @@ impl Interpreter {
             _ => panic!("ERROR"),
         };
 
-        // update name only if the fun or the instance is owned (and not just a reference)
+        // update name only if the instance is owned (and not just a reference)
         if matches!(target, Expr::Variable(_)) {
             match &new_val {
                 Value::Instance(instance_rc) if Rc::strong_count(instance_rc) == 1 => {
                     instance_rc.borrow_mut().update_name(var_name.to_owned())
                 }
-
-                Value::Function(fun_rc) if Rc::strong_count(fun_rc) == 1 => {
-                    fun_rc.borrow_mut().update_name(var_name.to_owned());
-                }
-
                 _ => (),
             }
         }
@@ -910,9 +910,12 @@ impl Interpreter {
         // get the function object
         match self.interpret_expression(callee)? {
             Value::Function(fun_rc) => self.interpret_fun_call_expr(fun_rc, args, err_token),
-            Value::LibFunction(native_fun_rc) => {
-                self.interpret_native_fun_call_expr(native_fun_rc, args, err_token)
-            }
+            Value::LibFunction(self_opt, native_fun_rc) => self.interpret_native_fun_call_expr(
+                native_fun_rc,
+                self_opt.map(|val| *val),
+                args,
+                err_token,
+            ),
             Value::Class(class_rc) => self.interpret_class_call_expr(class_rc, args, err_token),
 
             v => Err(Error::new(
@@ -924,13 +927,11 @@ impl Interpreter {
     }
     fn interpret_fun_call_expr(
         &mut self,
-        fun_rc: Rc<RefCell<SigmaFun>>,
+        fun_rc: Rc<SigmaFun>,
         args: &Vec<Expr>,
         err_token: &Token,
     ) -> Result<Value> {
-        self.check_arity(false, fun_rc.borrow().arity, args.len(), err_token)?;
-
-        let mut fun = fun_rc.borrow_mut();
+        self.check_arity(false, fun_rc.arity, args.len(), err_token)?;
 
         // get arguments
         let mut args_val = Vec::with_capacity(4);
@@ -940,17 +941,16 @@ impl Interpreter {
         }
 
         // call the function
-        fun.call(args_val)
+        fun_rc.call(args_val)
     }
     fn interpret_native_fun_call_expr(
         &mut self,
-        native_fun_rc: Rc<RefCell<NativeFun>>,
+        native_fun_rc: Rc<NativeFun>,
+        self_opt: Option<Value>,
         args: &Vec<Expr>,
         err_token: &Token,
     ) -> Result<Value> {
-        self.check_arity(false, native_fun_rc.borrow().arity, args.len(), err_token)?;
-
-        let fun = native_fun_rc.borrow_mut();
+        self.check_arity(false, native_fun_rc.arity, args.len(), err_token)?;
 
         // get arguments
         let mut args_val = Vec::with_capacity(4);
@@ -960,16 +960,16 @@ impl Interpreter {
         }
 
         // call the function
-        fun.call(args_val, err_token)
+        native_fun_rc.call(self_opt, args_val, err_token)
     }
     fn interpret_class_call_expr(
         &mut self,
-        class_rc: Rc<RefCell<SigmaClass>>,
+        class_rc: Rc<SigmaClass>,
         args: &Vec<Expr>,
         err_token: &Token,
     ) -> Result<Value> {
-        let mut class = class_rc.borrow_mut();
-        let instance_rc = class.new_instance(None);
+        let class = &class_rc;
+        let instance_rc = class.new_instance();
 
         let fun_rc = match instance_rc.borrow().get_property(&"__new".to_string()) {
             Some(Value::Function(fun_rc)) => fun_rc,
@@ -982,9 +982,7 @@ impl Interpreter {
             }
         };
 
-        let mut fun = fun_rc.borrow_mut();
-
-        self.check_arity(true, fun.arity, args.len(), err_token)?;
+        self.check_arity(true, fun_rc.arity, args.len(), err_token)?;
 
         // get arguments
         let mut args_val = Vec::with_capacity(4);
@@ -994,7 +992,7 @@ impl Interpreter {
         }
 
         // call the __new function
-        match fun.call(args_val)? {
+        match fun_rc.call(args_val)? {
             Value::Nil => Ok(Value::Instance(instance_rc)),
 
             // the function should return Nil
@@ -1017,9 +1015,9 @@ impl Interpreter {
             _ => panic!("ERROR"),
         };
 
-        let fun = SigmaFun::new_user_defined(Box::new(fun_decl), Rc::clone(&self.environment));
+        let fun = SigmaFun::new(fun_decl, Rc::clone(&self.environment), self)?;
 
-        Ok(Value::Function(Rc::new(RefCell::new(fun))))
+        Ok(Value::Function(Rc::new(fun)))
     }
     fn interpret_get_expr(&mut self, target: &Expr, property: &Token) -> Result<Value> {
         let target_val = self.interpret_expression(target)?;
@@ -1058,6 +1056,44 @@ impl Interpreter {
                     property_name,
                     instance.get_instance_name(),
                     instance.get_class_name(),
+                ),
+                property,
+            )),
+        }
+    }
+    fn interpret_class_get_expr(&mut self, target: &Expr, property: &Token) -> Result<Value> {
+        let target_val = self.interpret_expression(target)?;
+
+        let property_name = match &property.token_type {
+            Identifier(name) => name,
+            _ => unreachable!(),
+        };
+
+        let class_rc = match target_val {
+            Value::Class(class_rc) => class_rc,
+
+            val => {
+                return Err(Error::new(
+                    ErrorKind::Exception(ExceptionKind::TypeError),
+                    format!(
+                        "Can't get property `{}` of value of type {:?}.",
+                        property, val
+                    ),
+                    property,
+                ))
+            }
+        };
+
+        let class = class_rc.as_ref();
+
+        match class.get_property(property_name) {
+            Some(val) => Ok(val),
+
+            None => Err(Error::new(
+                ErrorKind::Exception(ExceptionKind::PropertyError),
+                format!(
+                    "No property named `{}` found on Class {}.",
+                    property_name, class.name,
                 ),
                 property,
             )),
@@ -1263,31 +1299,18 @@ impl Interpreter {
             _ => false,
         })?;
 
-        let val_opt = match lib {
-            Library::Number(num_lib) => num_lib.get_function(property_name),
+        let fun_rc = match lib {
+            Library::Number(num_lib) => num_lib.get_function(property_name)?,
 
-            Library::String(string_lib) => string_lib.get_function(property_name),
+            Library::String(string_lib) => string_lib.get_function(property_name)?,
 
-            Library::List(list_lib) => list_lib.get_function(property_name),
+            Library::List(list_lib) => list_lib.get_function(property_name)?,
 
-            Library::Range(range_lib) => range_lib.get_function(property_name),
+            Library::Range(range_lib) => range_lib.get_function(property_name)?,
 
-            Library::Prelude(prlelude_lib) => prlelude_lib.get_function(property_name),
+            Library::Prelude(prlelude_lib) => prlelude_lib.get_function(property_name)?,
         };
 
-        // if the function is not called with a self parameter
-        if target.is_none() {
-            return val_opt;
-        }
-
-        // if the function has a self, update its self value
-        val_opt.map(|val| match &val {
-            Value::LibFunction(native_fun_rc) => {
-                native_fun_rc.borrow_mut().take_self(target.unwrap());
-                val
-            }
-
-            _ => unreachable!(),
-        })
+        Some(Value::LibFunction(target.map(Box::new), fun_rc))
     }
 }

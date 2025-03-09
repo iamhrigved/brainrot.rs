@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use super::NativeLib;
+
 use crate::value::sigma_fun::SigmaFun;
 use crate::value::{native_fun::NativeFun, Value};
 
@@ -10,34 +12,21 @@ use crate::token::Token;
 type Result<T> = std::result::Result<T, Error>;
 
 pub struct ListLib {
-    loaded_functions: Vec<Value>,
+    loaded_functions: Vec<Rc<NativeFun>>,
 }
 
-impl ListLib {
-    pub fn new() -> Self {
-        Self {
-            loaded_functions: Vec::with_capacity(8),
-        }
+impl NativeLib for ListLib {
+    fn get_loaded(&self) -> &Vec<Rc<NativeFun>> {
+        &self.loaded_functions
     }
-    pub fn get_function(&mut self, fun_name: &String) -> Option<Value> {
-        let loaded_fun_pos = self.loaded_functions.iter().position(|fun_val| {
-            let Value::LibFunction(fun_rc) = &fun_val else {
-                unreachable!()
-            };
 
-            &fun_rc.borrow().name == fun_name
-        });
-
-        if let Some(index) = loaded_fun_pos {
-            return self.loaded_functions.get(index).cloned();
-        }
-
-        self.match_function(fun_name).map(|fun| self.load_fun(fun))
+    fn get_loaded_mut(&mut self) -> &mut Vec<Rc<NativeFun>> {
+        &mut self.loaded_functions
     }
 
     #[rustfmt::skip]
-    fn match_function(&self, fun_name: &String) -> Option<NativeFun> {
-        let fun = match &**fun_name {
+    fn match_function(&self, fun_name: &str) -> Option<NativeFun> {
+        let fun = match fun_name {
             "len" => NativeFun::new("len", (0, Some(0)), Self::len),
             "is_empty" => NativeFun::new("is_emtpy", (0, Some(0)), Self::is_empty),
             "contains" => NativeFun::new("contains", (1, Some(1)), Self::contains),
@@ -52,6 +41,7 @@ impl ListLib {
             "any" => NativeFun::new("any", (1, Some(1)), Self::any),
             "map" => NativeFun::new("map", (1, Some(1)), Self::map),
             "filter" => NativeFun::new("filter", (1, Some(1)), Self::filter),
+            "extend" => NativeFun::new("extend", (1, Some(1)), Self::extend),
             "take" => NativeFun::new("take", (1, Some(1)), Self::take),
             "truncate" => NativeFun::new("truncate", (1, Some(1)), Self::truncate),
 
@@ -60,14 +50,13 @@ impl ListLib {
 
         Some(fun)
     }
+}
 
-    fn load_fun(&mut self, sigma_fun: NativeFun) -> Value {
-        let fun_rc = Rc::new(RefCell::new(sigma_fun));
-        let fun_val = Value::LibFunction(fun_rc);
-
-        self.loaded_functions.push(fun_val.clone());
-
-        fun_val
+impl ListLib {
+    pub fn new() -> Self {
+        Self {
+            loaded_functions: Vec::with_capacity(4),
+        }
     }
 
     // HELPER FUNCTIONS
@@ -159,6 +148,7 @@ impl ListLib {
 
                 let index = Self::check_index(*num, err_token)?;
 
+                // return Nil if index not found
                 Ok(list.get(index).cloned().unwrap_or(Value::Nil))
             }
 
@@ -295,12 +285,12 @@ impl ListLib {
             }
         };
 
-        let fun_name = Self::check_arity(&fun_rc.borrow(), 1, "any", err_token)?;
+        let fun_name = Self::check_arity(&fun_rc, 1, "any", err_token)?;
 
         let list = list_rc.borrow();
 
         for item in list.iter() {
-            match fun_rc.borrow_mut().call(vec![item.clone()])? {
+            match fun_rc.call(vec![item.clone()])? {
                 Value::Boolean(bool) => {
                     if bool {
                         return Ok(Value::Boolean(true));
@@ -342,13 +332,12 @@ impl ListLib {
 
         let list = list_rc.borrow();
 
-        Self::check_arity(&fun_rc.borrow(), 1, "map", err_token)?;
+        Self::check_arity(&fun_rc, 1, "map", err_token)?;
 
         let mut ret = Vec::with_capacity(list.len());
-        let mut fun_mut = fun_rc.borrow_mut();
 
         for item in list.iter() {
-            ret.push(fun_mut.call(vec![item.clone()])?)
+            ret.push(fun_rc.call(vec![item.clone()])?)
         }
 
         let ret_rc = Rc::new(RefCell::new(ret));
@@ -374,14 +363,13 @@ impl ListLib {
             }
         };
 
-        let fun_name = Self::check_arity(&fun_rc.borrow(), 1, "filter", err_token)?;
+        let fun_name = Self::check_arity(&fun_rc, 1, "filter", err_token)?;
 
         let list = list_rc.borrow();
-        let mut fun_mut = fun_rc.borrow_mut();
         let mut ret = Vec::with_capacity(list.len());
 
         for item in list.iter() {
-            match fun_mut.call(vec![item.clone()])? {
+            match fun_rc.call(vec![item.clone()])? {
                 Value::Boolean(bool) => {
                     if bool {
                         ret.push(item.clone())
@@ -405,6 +393,32 @@ impl ListLib {
         let ret_val = Value::List(ret_rc);
 
         Ok(ret_val)
+    }
+    fn extend(mut args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
+        let add_list = match args_val.pop().unwrap() {
+            Value::List(list_rc) => list_rc.borrow().clone(),
+
+            val => {
+                return Err(Error::new(
+                    ErrorKind::Exception(TypeError),
+                    format!(
+                        "Native function `extend` expects the argument to be a List. Found {}",
+                        val
+                    ),
+                    err_token,
+                ))
+            }
+        };
+
+        match &args_val[0] {
+            Value::List(list_rc) => {
+                list_rc.borrow_mut().extend(add_list);
+
+                Ok(Value::Nil)
+            }
+
+            _ => unreachable!(),
+        }
     }
     fn take(mut args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
         let num = match args_val.pop().unwrap() {
@@ -449,19 +463,20 @@ impl ListLib {
         }
     }
     fn truncate(mut args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
-        let num =
-            match args_val.pop().unwrap() {
-                Value::Number(num) => num,
+        let num = match args_val.pop().unwrap() {
+            Value::Number(num) => num,
 
-                val => return Err(Error::new(
+            val => {
+                return Err(Error::new(
                     ErrorKind::Exception(TypeError),
                     format!(
                         "Native function `truncate` expects the argument to be a Number. Found {}",
                         val
                     ),
                     err_token,
-                )),
-            };
+                ))
+            }
+        };
 
         if num < 0.0 || num.fract() != 0.0 {
             return Err(Error::new(

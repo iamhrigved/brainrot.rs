@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use super::NativeLib;
+
 use crate::value::{native_fun::NativeFun, Value};
 
 use crate::error::{Error, ErrorKind, ExceptionKind::*};
@@ -9,34 +11,21 @@ use crate::token::Token;
 type Result<T> = std::result::Result<T, Error>;
 
 pub struct StringLib {
-    loaded_functions: Vec<Value>,
+    loaded_functions: Vec<Rc<NativeFun>>,
 }
 
-impl StringLib {
-    pub fn new() -> Self {
-        Self {
-            loaded_functions: Vec::with_capacity(8),
-        }
+impl NativeLib for StringLib {
+    fn get_loaded(&self) -> &Vec<Rc<NativeFun>> {
+        &self.loaded_functions
     }
-    pub fn get_function(&mut self, fun_name: &String) -> Option<Value> {
-        let loaded_fun_pos = self.loaded_functions.iter().position(|fun_val| {
-            let Value::LibFunction(fun_rc) = &fun_val else {
-                unreachable!()
-            };
 
-            &fun_rc.borrow().name == fun_name
-        });
-
-        if let Some(index) = loaded_fun_pos {
-            return self.loaded_functions.get(index).cloned();
-        }
-
-        self.match_function(fun_name).map(|fun| self.load_fun(fun))
+    fn get_loaded_mut(&mut self) -> &mut Vec<Rc<NativeFun>> {
+        &mut self.loaded_functions
     }
 
     #[rustfmt::skip]
-    fn match_function(&self, fun_name: &String) -> Option<NativeFun> {
-        let fun = match &**fun_name {
+    fn match_function(&self, fun_name: &str) -> Option<NativeFun> {
+        let fun = match fun_name {
             "len" => NativeFun::new("len", (0, Some(0)), Self::len),
             "is_empty" => NativeFun::new("is_emtpy", (0, Some(0)), Self::is_empty),
             "to_lowercase" => NativeFun::new("to_lowercase", (0, Some(0)), Self::to_lowercase),
@@ -45,24 +34,25 @@ impl StringLib {
             "trim" => NativeFun::new("trim", (0, Some(0)), Self::trim),
             "contains" => NativeFun::new("contains", (0, Some(0)), Self::contains),
             "starts_with" => NativeFun::new("starts_with", (1, Some(1)), Self::starts_with),
+            "ends_with" => NativeFun::new("ends_with", (1, Some(1)), Self::ends_with),
             "chars" => NativeFun::new("chars", (0, Some(0)), Self::chars),
             "chat_at" => NativeFun::new("chat_at", (1, Some(1)), Self::char_at),
             "reverse" => NativeFun::new("reverse", (0, Some(0)), Self::reverse),
+            "concat" => NativeFun::new("concat", (1, Some(1)), Self::concat),
             "replace" => NativeFun::new("replace", (2, Some(2)), Self::replace),
+            "repeat" => NativeFun::new("repeat", (1, Some(1)), Self::repeat),
 
             _ => return None,
         };
-
         Some(fun)
     }
+}
 
-    fn load_fun(&mut self, sigma_fun: NativeFun) -> Value {
-        let fun_rc = Rc::new(RefCell::new(sigma_fun));
-        let fun_val = Value::LibFunction(fun_rc);
-
-        self.loaded_functions.push(fun_val.clone());
-
-        fun_val
+impl StringLib {
+    pub fn new() -> Self {
+        Self {
+            loaded_functions: Vec::with_capacity(8),
+        }
     }
 
     // HELPER FUNCTIONS
@@ -85,19 +75,19 @@ impl StringLib {
 
         Ok(num as usize)
     }
-    fn check_list_len(index: usize, list_len: usize, err_token: &Token) -> Result<()> {
-        if index >= list_len {
-            return Err(Error::new(
-                ErrorKind::Exception(TypeError),
-                format!(
-                    "The length of the List is {} but the index supplied is {}.",
-                    list_len, index
-                ),
-                err_token,
-            ));
-        }
-        Ok(())
-    }
+    //fn check_list_len(index: usize, list_len: usize, err_token: &Token) -> Result<()> {
+    //    if index >= list_len {
+    //        return Err(Error::new(
+    //            ErrorKind::Exception(TypeError),
+    //            format!(
+    //                "The length of the List is {} but the index supplied is {}.",
+    //                list_len, index
+    //            ),
+    //            err_token,
+    //        ));
+    //    }
+    //    Ok(())
+    //}
 
     // FUNCTIONS
     fn len(args_val: Vec<Value>, _err_token: &Token) -> Result<Value> {
@@ -209,11 +199,12 @@ impl StringLib {
     }
     fn char_at(args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
         match (&args_val[0], &args_val[1]) {
-            (Value::String(strin), Value::Number(num)) => {
+            (Value::String(string), Value::Number(num)) => {
                 let index = Self::check_index(*num, err_token)?;
 
-                let char_opt = strin.chars().nth(index);
+                let char_opt = string.chars().nth(index);
 
+                // returns Nil if index not found
                 let ret_val = char_opt
                     .map(|ch| Value::String(ch.to_string()))
                     .unwrap_or(Value::Nil);
@@ -242,6 +233,22 @@ impl StringLib {
             _ => unreachable!(),
         }
     }
+    fn concat(args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
+        match (&args_val[0], &args_val[1]) {
+            (Value::String(str1), Value::String(str2)) => {
+                Ok(Value::String(format!("{}{}", str1, str2)))
+            }
+
+            (_, val) => Err(Error::new(
+                ErrorKind::Exception(TypeError),
+                format!(
+                    "Native function `concat` expects its argument to be a String. Found {:?}",
+                    val
+                ),
+                err_token,
+            )),
+        }
+    }
     fn replace(args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
         match (&args_val[0], &args_val[1], &args_val[2]) {
             (Value::String(string), Value::String(from), Value::String(to)) => {
@@ -264,8 +271,41 @@ impl StringLib {
                         problematic_val
                     ),
                     err_token,
-            ))
+                ))
             }
+        }
+    }
+    fn repeat(mut args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
+        let num = match args_val.pop().unwrap() {
+            Value::Number(num) => num,
+
+            val => {
+                return Err(Error::new(
+                    ErrorKind::Exception(TypeError),
+                    format!(
+                        "Native function `repeat` expects its argument to be a Number. Found {:?}",
+                        val
+                    ),
+                    err_token,
+                ))
+            }
+        };
+
+        if num < 0.0 || num.fract() != 0.0 {
+            return Err(Error::new(
+                ErrorKind::Exception(TypeError),
+                format!(
+                    "The argument to the native function `repeat` must be a positive-integer. Found `{}`",
+                    num
+                ),
+                err_token,
+            ));
+        }
+
+        match &args_val[0] {
+            Value::String(str1) => Ok(Value::String(str1.repeat(num as usize))),
+
+            _ => unreachable!(),
         }
     }
 }

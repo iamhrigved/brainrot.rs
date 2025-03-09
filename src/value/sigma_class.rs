@@ -19,13 +19,16 @@ impl SigmaClass {
     pub fn new(name: String, properties: HashMap<String, Value>) -> Self {
         Self { name, properties }
     }
-    pub fn new_instance(&mut self, name: Option<String>) -> Rc<RefCell<SigmaInstance>> {
-        let instance = SigmaInstance::new(name, self.clone());
+    pub fn new_instance(&self) -> Rc<RefCell<SigmaInstance>> {
+        let instance = SigmaInstance::new(None, self.clone());
         let instance_rc = Rc::new(RefCell::new(instance));
 
         instance_rc.borrow().define_me(Rc::clone(&instance_rc));
 
         instance_rc
+    }
+    pub fn get_property(&self, name: &String) -> Option<Value> {
+        self.properties.get(name).cloned()
     }
 }
 
@@ -38,22 +41,9 @@ impl Clone for SigmaClass {
         let name = self.name.clone();
         let mut properties = HashMap::with_capacity(8);
 
-        for (var_name, val) in &self.properties {
-            let val_clone = match val {
-                // deep-clone only in case of a function
-                Value::Function(fun_rc) => {
-                    let fun_clone = fun_rc.borrow().clone();
-                    let fun_clone_rc = Rc::new(RefCell::new(fun_clone));
-
-                    Value::Function(fun_clone_rc)
-                }
-
-                // regular clone for other values
-                val => val.clone(),
-            };
-
-            properties.insert(var_name.clone(), val_clone);
-        }
+        self.properties.iter().for_each(|(name, val)| {
+            properties.insert(name.clone(), val.deep_clone());
+        });
 
         Self { name, properties }
     }

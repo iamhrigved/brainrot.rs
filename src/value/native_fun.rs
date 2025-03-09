@@ -6,7 +6,6 @@ type Result<T> = std::result::Result<T, Error>;
 
 pub struct NativeFun {
     pub name: String,
-    self_val: Option<Value>,
     pub arity: (usize, Option<usize>),
     call_fun: fn(Vec<Value>, &Token) -> Result<Value>,
 }
@@ -25,21 +24,21 @@ impl NativeFun {
     ) -> Self {
         Self {
             name: name.to_owned(),
-            self_val: None,
             arity,
             call_fun,
         }
     }
 
-    pub fn take_self(&mut self, self_val: Value) {
-        self.self_val = Some(self_val);
-    }
-
-    pub fn call(&self, mut args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
+    pub fn call(
+        &self,
+        self_opt: Option<Value>,
+        mut args_val: Vec<Value>,
+        err_token: &Token,
+    ) -> Result<Value> {
         // add the self value to the args if there is a self
-        if let Some(val) = &self.self_val {
-            args_val.insert(0, val.clone());
-        };
+        if let Some(self_val) = self_opt {
+            args_val.insert(0, self_val)
+        }
 
         (self.call_fun)(args_val, err_token)
     }

@@ -8,11 +8,13 @@ use std::string::String;
 
 use crate::environment::Environment;
 use crate::error::{Error, ErrorKind, ExceptionKind, FatalKind::*};
-use crate::libs::{Library, NativeLib};
+use crate::libs::{Library, NativeFunLib};
 use crate::parser::{Expr, Stmt};
 use crate::token::{Token, TokenType, TokenType::*};
 use crate::value::native_fun::NativeFun;
-use crate::value::{sigma_class::SigmaClass, sigma_fun::SigmaFun, Value};
+use crate::value::{
+    native_class::NativeClass, sigma_class::SigmaClass, sigma_fun::SigmaFun, Value,
+};
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -96,7 +98,7 @@ impl Interpreter {
         name: &String,
         declarations: &Vec<Stmt>,
     ) -> Result<Option<ControlFlow>> {
-        let mut properties = HashMap::with_capacity(8);
+        let mut properties = HashMap::with_capacity(4);
 
         // new environment for methods
         let new_env = Environment::new();
@@ -128,9 +130,9 @@ impl Interpreter {
         let class = SigmaClass::new(name.to_owned(), properties);
         let class_rc = Rc::new(class);
 
-        // define `Self` type in the method environment (we have the RefCell mutable access)
+        // define `Me` type in the method environment (we have the RefCell mutable access)
         let mut env_mut = new_env.borrow_mut();
-        env_mut.define_var("Self".to_string(), Some(Value::Class(Rc::clone(&class_rc))));
+        env_mut.define_var("Me".to_string(), Some(Value::Class(Rc::clone(&class_rc))));
         env_mut.define_var(name.to_string(), Some(Value::Class(Rc::clone(&class_rc))));
 
         self.environment
@@ -910,13 +912,16 @@ impl Interpreter {
         // get the function object
         match self.interpret_expression(callee)? {
             Value::Function(fun_rc) => self.interpret_fun_call_expr(fun_rc, args, err_token),
-            Value::LibFunction(self_opt, native_fun_rc) => self.interpret_native_fun_call_expr(
+            Value::NativeFunction(self_opt, native_fun_rc) => self.interpret_native_fun_call_expr(
                 native_fun_rc,
                 self_opt.map(|val| *val),
                 args,
                 err_token,
             ),
             Value::Class(class_rc) => self.interpret_class_call_expr(class_rc, args, err_token),
+            Value::NativeClass(class_rc) => {
+                self.interpret_native_class_call_expr(class_rc, args, err_token)
+            }
 
             v => Err(Error::new(
                 ErrorKind::Exception(ExceptionKind::TypeError),
@@ -968,8 +973,7 @@ impl Interpreter {
         args: &Vec<Expr>,
         err_token: &Token,
     ) -> Result<Value> {
-        let class = &class_rc;
-        let instance_rc = class.new_instance();
+        let instance_rc = class_rc.new_instance();
 
         let fun_rc = match instance_rc.borrow().get_property(&"__new".to_string()) {
             Some(Value::Function(fun_rc)) => fun_rc,
@@ -1002,6 +1006,36 @@ impl Interpreter {
                 err_token,
             )),
         }
+    }
+    fn interpret_native_class_call_expr(
+        &mut self,
+        class_rc: Rc<NativeClass>,
+        args: &Vec<Expr>,
+        err_token: &Token,
+    ) -> Result<Value> {
+        let instance_rc = class_rc.new_instance();
+
+        let (me_opt, fun_rc) = match instance_rc.borrow().get_property(&"__new".to_string()) {
+            Some(Value::NativeFunction(me_opt, fun_rc)) => (me_opt.map(|b| *b), fun_rc),
+
+            _ => {
+                // if no __new function defined, check if the arity is 0 and return an instance
+                self.check_arity(true, (0, Some(0)), args.len(), err_token)?;
+
+                return Ok(Value::Instance(Rc::clone(&instance_rc)));
+            }
+        };
+
+        self.check_arity(true, fun_rc.arity, args.len(), err_token)?;
+
+        // get arguments
+        let mut args_val = Vec::with_capacity(4);
+
+        for arg in args {
+            args_val.push(self.interpret_expression(arg)?);
+        }
+
+        fun_rc.call(me_opt, args_val, err_token)
     }
     fn interpret_closure_expr(&mut self, expr: &Expr) -> Result<Value> {
         let fun_decl = match expr {
@@ -1040,6 +1074,7 @@ impl Interpreter {
                     property,
                 );
 
+                // if target is not an instance, try to get native value
                 return self.get_native_fun(Some(val), property_name).ok_or(error);
             }
         };
@@ -1073,14 +1108,20 @@ impl Interpreter {
             Value::Class(class_rc) => class_rc,
 
             val => {
+                let mut err_message = format!(
+                    "Can't get property `{}` of value of type {:?}.",
+                    property, val
+                );
+
+                if let Value::NativeClass(class) = val {
+                    err_message = format!("Can't get from NativeClass {}", class.name);
+                }
+
                 return Err(Error::new(
                     ErrorKind::Exception(ExceptionKind::TypeError),
-                    format!(
-                        "Can't get property `{}` of value of type {:?}.",
-                        property, val
-                    ),
+                    err_message,
                     property,
-                ))
+                ));
             }
         };
 
@@ -1309,8 +1350,10 @@ impl Interpreter {
             Library::Range(range_lib) => range_lib.get_function(property_name)?,
 
             Library::Prelude(prlelude_lib) => prlelude_lib.get_function(property_name)?,
+
+            _ => return None,
         };
 
-        Some(Value::LibFunction(target.map(Box::new), fun_rc))
+        Some(Value::NativeFunction(target.map(Box::new), fun_rc))
     }
 }

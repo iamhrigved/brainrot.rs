@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::NativeLib;
+use super::NativeFunLib;
 
 use crate::value::{native_fun::NativeFun, Value};
 
@@ -14,7 +14,7 @@ pub struct StringLib {
     loaded_functions: Vec<Rc<NativeFun>>,
 }
 
-impl NativeLib for StringLib {
+impl NativeFunLib for StringLib {
     fn get_loaded(&self) -> &Vec<Rc<NativeFun>> {
         &self.loaded_functions
     }
@@ -51,7 +51,7 @@ impl NativeLib for StringLib {
 impl StringLib {
     pub fn new() -> Self {
         Self {
-            loaded_functions: Vec::with_capacity(8),
+            loaded_functions: Vec::with_capacity(4),
         }
     }
 

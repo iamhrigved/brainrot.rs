@@ -121,6 +121,7 @@ pub enum Stmt {
     Throw(Token, Option<Expr>),
     If(Expr, Box<Stmt>, Option<Box<Stmt>>),
     Print(Expr),
+    //Import(Token, String),
     For(Option<Box<Stmt>>, Option<Expr>, Option<Expr>, Box<Stmt>),
     ForIn(Token, String, Expr, Box<Stmt>), // for, var, expr, stmt
     While(Expr, Box<Stmt>),

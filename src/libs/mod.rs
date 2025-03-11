@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+pub mod class;
 pub mod list;
 pub mod number;
 pub mod prelude;
@@ -8,13 +9,14 @@ pub mod string;
 
 use crate::value::native_fun::NativeFun;
 
+use class::ClassLib;
 use list::ListLib;
 use number::NumberLib;
 use prelude::Prelude;
 use range::RangeLib;
 use string::StringLib;
 
-pub trait NativeLib {
+pub trait NativeFunLib {
     // get a reference to the current loaded functions vector
     fn get_loaded(&self) -> &Vec<Rc<NativeFun>>;
     fn get_loaded_mut(&mut self) -> &mut Vec<Rc<NativeFun>>;
@@ -35,8 +37,8 @@ pub trait NativeLib {
         self.match_function(fun_name).map(|fun| self.load_fun(fun))
     }
 
-    fn load_fun(&mut self, sigma_fun: NativeFun) -> Rc<NativeFun> {
-        let fun_rc = Rc::new(sigma_fun);
+    fn load_fun(&mut self, native_fun: NativeFun) -> Rc<NativeFun> {
+        let fun_rc = Rc::new(native_fun);
 
         self.get_loaded_mut().push(Rc::clone(&fun_rc));
 
@@ -44,12 +46,20 @@ pub trait NativeLib {
     }
 }
 
+//pub enum FunLib {
+//    Number(NumberLib),
+//    String(StringLib),
+//    List(ListLib),
+//    Range(RangeLib),
+//}
+
 pub enum Library {
     Number(NumberLib),
     String(StringLib),
     List(ListLib),
     Range(RangeLib),
     Prelude(Prelude),
+    Class(ClassLib),
 }
 
 impl Library {
@@ -59,7 +69,10 @@ impl Library {
         let strign_lib = Library::String(StringLib::new());
         let list_lib = Library::List(ListLib::new());
         let range_lib = Library::Range(RangeLib::new());
+        let class_lib = Library::Class(ClassLib::new());
 
-        vec![prelude, number_lib, strign_lib, list_lib, range_lib]
+        vec![
+            prelude, number_lib, strign_lib, list_lib, range_lib, class_lib,
+        ]
     }
 }

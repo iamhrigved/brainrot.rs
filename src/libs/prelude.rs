@@ -1,6 +1,6 @@
 #![allow(clippy::new_without_default)]
 
-use super::NativeLib;
+use super::NativeFunLib;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -15,7 +15,7 @@ pub struct Prelude {
     loaded_functions: Vec<Rc<NativeFun>>,
 }
 
-impl NativeLib for Prelude {
+impl NativeFunLib for Prelude {
     fn get_loaded(&self) -> &Vec<Rc<NativeFun>> {
         &self.loaded_functions
     }

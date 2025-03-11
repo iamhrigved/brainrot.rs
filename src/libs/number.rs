@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use super::NativeLib;
+use super::NativeFunLib;
 
 use crate::value::{native_fun::NativeFun, Value};
 
@@ -13,7 +13,7 @@ pub struct NumberLib {
     loaded_functions: Vec<Rc<NativeFun>>,
 }
 
-impl NativeLib for NumberLib {
+impl NativeFunLib for NumberLib {
     fn get_loaded(&self) -> &Vec<Rc<NativeFun>> {
         &self.loaded_functions
     }

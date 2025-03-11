@@ -1,0 +1,73 @@
+use std::any::Any;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use super::{instance::Instance, Value};
+
+pub trait NativeInstanceData: Any {
+    fn as_any_ref(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn box_clone(&self) -> Box<dyn NativeInstanceData>;
+}
+
+impl<T: Any + Clone> NativeInstanceData for T {
+    fn as_any_ref(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn box_clone(&self) -> Box<dyn NativeInstanceData> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn NativeInstanceData> {
+    fn clone(&self) -> Self {
+        self.box_clone()
+    }
+}
+
+#[derive(Clone)]
+pub struct NativeClass {
+    pub name: String,
+    pub properties: HashMap<String, Value>,
+    pub data_creator: Option<fn() -> Box<dyn NativeInstanceData>>,
+}
+
+impl NativeClass {
+    pub fn new(
+        name: String,
+        properties: HashMap<String, Value>,
+        data_creator: Option<fn() -> Box<dyn NativeInstanceData>>,
+    ) -> Self {
+        Self {
+            name,
+            properties,
+            data_creator,
+        }
+    }
+
+    pub fn get_property(&self, name: &String) -> Option<Value> {
+        self.properties.get(name).cloned()
+    }
+
+    pub fn new_instance(&self) -> Rc<RefCell<Instance>> {
+        let data_opt = self.data_creator.as_ref().map(|fun| fun());
+
+        let instance = Instance::new_native(None, self.clone(), data_opt);
+
+        let instance_rc = Rc::new(RefCell::new(instance));
+
+        instance_rc.borrow_mut().define_me(Rc::clone(&instance_rc));
+
+        instance_rc
+    }
+}
+
+impl std::fmt::Display for NativeClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<NativeClass: {}", self.name)
+    }
+}

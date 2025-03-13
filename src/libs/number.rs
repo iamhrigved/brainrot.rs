@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use super::NativeFunLib;
+use super::NativeLib;
 
 use crate::value::{native_fun::NativeFun, Value};
 
@@ -9,21 +9,22 @@ use crate::token::Token;
 
 type Result<T> = std::result::Result<T, Error>;
 
+#[derive(Clone)]
 pub struct NumberLib {
-    loaded_functions: Vec<Rc<NativeFun>>,
+    loaded_functions: Vec<Value>,
 }
 
-impl NativeFunLib for NumberLib {
-    fn get_loaded(&self) -> &Vec<Rc<NativeFun>> {
+impl NativeLib for NumberLib {
+    fn get_loaded(&self) -> &Vec<Value> {
         &self.loaded_functions
     }
 
-    fn get_loaded_mut(&mut self) -> &mut Vec<Rc<NativeFun>> {
+    fn get_loaded_mut(&mut self) -> &mut Vec<Value> {
         &mut self.loaded_functions
     }
 
     #[rustfmt::skip]
-    fn match_function(&self, fun_name: &str) -> Option<NativeFun> {
+    fn match_item(&self, fun_name: &str) -> Option<Value> {
         let fun = match fun_name {
             "round" => NativeFun::new("round", (0, Some(0)), Self::round),
             "floor" => NativeFun::new("floor", (0, Some(0)), Self::floor),
@@ -37,7 +38,7 @@ impl NativeFunLib for NumberLib {
             _ => return None,
         }; 
 
-        Some(fun)
+        Some(Value::NativeFunction(None, Rc::new(fun)))
     }
 }
 

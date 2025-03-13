@@ -8,12 +8,13 @@ use std::string::String;
 
 use crate::environment::Environment;
 use crate::error::{Error, ErrorKind, ExceptionKind, FatalKind::*};
-use crate::libs::{Library, NativeFunLib};
+use crate::libs::{Library, NativeLib};
 use crate::parser::{Expr, Stmt};
+use crate::sigma::Sigma;
 use crate::token::{Token, TokenType, TokenType::*};
 use crate::value::native_fun::NativeFun;
 use crate::value::{
-    native_class::NativeClass, sigma_class::SigmaClass, sigma_fun::SigmaFun, Value,
+    module::Module, native_class::NativeClass, sigma_class::SigmaClass, sigma_fun::SigmaFun, Value,
 };
 
 type Result<T> = std::result::Result<T, Error>;
@@ -56,6 +57,12 @@ impl Interpreter {
             Stmt::VarDecl(name, expr_opt) => self.interpret_var_decl(name, expr_opt.as_ref()),
             Stmt::TryCatch(try_stmt, catch_stmts) => {
                 self.interpret_try_stmt(try_stmt.as_ref(), catch_stmts)
+            }
+            Stmt::Include(path_tok, var_opt) => {
+                self.interpret_include_stmt(path_tok, var_opt.as_ref())
+            }
+            Stmt::FromInclude(path_tok, import_items) => {
+                self.interpret_from_include_stmt(path_tok, import_items)
             }
             Stmt::If(cond, then_branch, else_branch_opt) => self.interpret_if_stmt(
                 cond,
@@ -225,6 +232,61 @@ impl Interpreter {
 
                 _ => (),
             }
+        }
+
+        Ok(None)
+    }
+    fn interpret_include_stmt(
+        &mut self,
+        path_token: &Token,
+        var_name: Option<&String>,
+    ) -> Result<Option<ControlFlow>> {
+        let (mod_path, mod_name) = match &path_token.token_type {
+            // if string: mod_path is the string and the var_name is already a Some
+            String(str) => (str.to_owned(), var_name.unwrap().to_owned()),
+
+            // if identifier: mod_path is `identifier.rot` and var_name may be present
+            Identifier(str) => (
+                format!("{}.rot", str),
+                var_name.cloned().unwrap_or(str.to_owned()),
+            ),
+
+            _ => unreachable!(),
+        };
+
+        let mod_val = self.run_module(&mod_path, &mod_name, None, path_token)?;
+
+        self.environment
+            .borrow_mut()
+            .define_var(mod_name.to_owned(), Some(mod_val));
+
+        Ok(None)
+    }
+    fn interpret_from_include_stmt(
+        &mut self,
+        path_token: &Token,
+        import_items: &Vec<(Token, Option<String>)>,
+    ) -> Result<Option<ControlFlow>> {
+        let (mod_path, mod_name) = match &path_token.token_type {
+            String(str) => (str.to_owned(), str.to_owned()),
+
+            Identifier(name) => (format!("{}.rot", name), name.to_owned()),
+
+            _ => unreachable!(),
+        };
+
+        for (item_tok, var_opt) in import_items {
+            let item_name = match &item_tok.token_type {
+                Identifier(str) => str.to_owned(),
+                _ => unreachable!(),
+            };
+
+            let item_val = self.run_module(&mod_path, &mod_name, Some(item_tok), path_token)?;
+
+            // define the variable with the name item_name or var_opt (if given)
+            self.environment
+                .borrow_mut()
+                .define_var(var_opt.clone().unwrap_or(item_name), Some(item_val));
         }
 
         Ok(None)
@@ -476,8 +538,11 @@ impl Interpreter {
             }
             Expr::Closure(_, _, _, _) => self.interpret_closure_expr(expr),
             Expr::Get(target, property) => self.interpret_get_expr(target.as_ref(), property),
-            Expr::ClassGet(target, property) => {
-                self.interpret_class_get_expr(target.as_ref(), property)
+            Expr::PathGet(target, property) => {
+                self.interpret_path_get_expr(target.as_ref(), property)
+            }
+            Expr::PathSet(target, property, expr) => {
+                self.interpret_path_set_expr(target.as_ref(), property, expr.as_ref())
             }
             Expr::Set(target, property, expr) => {
                 self.interpret_set_expr(target.as_ref(), property, expr.as_ref())
@@ -784,7 +849,9 @@ impl Interpreter {
             Ok(val) => Ok(val),
 
             // if no entry is found, get the native function with the same name
-            Err(val_not_found_err) => self.get_native_fun(None, var_name).ok_or(val_not_found_err),
+            Err(val_not_found_err) => self
+                .resolve_native_val(None, var_name)
+                .ok_or(val_not_found_err),
         }
     }
     fn interpret_index_expr(
@@ -1035,7 +1102,9 @@ impl Interpreter {
             args_val.push(self.interpret_expression(arg)?);
         }
 
-        fun_rc.call(me_opt, args_val, err_token)
+        fun_rc.call(me_opt, args_val, err_token);
+
+        Ok(Value::Instance(instance_rc))
     }
     fn interpret_closure_expr(&mut self, expr: &Expr) -> Result<Value> {
         let fun_decl = match expr {
@@ -1075,7 +1144,9 @@ impl Interpreter {
                 );
 
                 // if target is not an instance, try to get native value
-                return self.get_native_fun(Some(val), property_name).ok_or(error);
+                return self
+                    .resolve_native_val(Some(val), property_name)
+                    .ok_or(error);
             }
         };
 
@@ -1096,47 +1167,73 @@ impl Interpreter {
             )),
         }
     }
-    fn interpret_class_get_expr(&mut self, target: &Expr, property: &Token) -> Result<Value> {
+    fn interpret_path_get_expr(&mut self, target: &Expr, property_tok: &Token) -> Result<Value> {
         let target_val = self.interpret_expression(target)?;
 
-        let property_name = match &property.token_type {
+        let property_name = match &property_tok.token_type {
             Identifier(name) => name,
             _ => unreachable!(),
         };
 
-        let class_rc = match target_val {
-            Value::Class(class_rc) => class_rc,
+        let mod_rc = match target_val {
+            Value::Module(mod_rc) => mod_rc,
 
             val => {
-                let mut err_message = format!(
-                    "Can't get property `{}` of value of type {:?}.",
-                    property, val
-                );
-
-                if let Value::NativeClass(class) = val {
-                    err_message = format!("Can't get from NativeClass {}", class.name);
-                }
-
                 return Err(Error::new(
                     ErrorKind::Exception(ExceptionKind::TypeError),
-                    err_message,
-                    property,
+                    format!(
+                        "The `::` operator can only be used on Modules. Found {:?}.",
+                        val
+                    ),
+                    property_tok,
                 ));
             }
         };
 
-        let class = class_rc.as_ref();
+        let mod_name = { mod_rc.borrow().name.to_string() };
+        let mut mod_mut = mod_rc.borrow_mut();
 
-        match class.get_property(property_name) {
+        match mod_mut.get_property(property_name) {
             Some(val) => Ok(val),
 
             None => Err(Error::new(
                 ErrorKind::Exception(ExceptionKind::PropertyError),
                 format!(
-                    "No property named `{}` found on Class {}.",
-                    property_name, class.name,
+                    "No property named `{}` found on Module `{}`.",
+                    property_name, mod_name
                 ),
-                property,
+                property_tok,
+            )),
+        }
+    }
+    fn interpret_path_set_expr(
+        &mut self,
+        target: &Expr,
+        property_tok: &Token,
+        expr: &Expr,
+    ) -> Result<Value> {
+        let target_val = self.interpret_expression(target)?;
+
+        let property_name = match &property_tok.token_type {
+            Identifier(name) => name.to_owned(),
+            _ => unreachable!(),
+        };
+
+        let val = self.interpret_expression(expr)?;
+
+        match target_val {
+            Value::Module(mod_rc) => {
+                mod_rc.borrow_mut().set_property(property_name, val.clone());
+                Ok(val)
+            }
+
+            val => Err(Error::new(
+                ErrorKind::Exception(ExceptionKind::TypeError),
+                format!(
+                    "The `::` operator can only be used on Modules. Found {:?}.",
+                    val
+                ),
+                property_tok,
             )),
         }
     }
@@ -1160,7 +1257,7 @@ impl Interpreter {
                 return Err(Error::new(
                     ErrorKind::Exception(ExceptionKind::TypeError),
                     format!(
-                        "Can't set property `{}` of value of built-in type {:?}.",
+                        "Can't set property `{}` of value of type {:?}.",
                         property, val
                     ),
                     property,
@@ -1325,35 +1422,127 @@ impl Interpreter {
 
         Ok(())
     }
-    fn get_native_fun(&mut self, target: Option<Value>, property_name: &String) -> Option<Value> {
-        let lib = self.native_libs.iter_mut().find(|lib| match lib {
-            Library::Number(_) if matches!(target, Some(Value::Number(_))) => true,
-
-            Library::String(_) if matches!(target, Some(Value::String(_))) => true,
-
-            Library::List(_) if matches!(target, Some(Value::List(_))) => true,
-
-            Library::Range(_) if matches!(target, Some(Value::Range(_, _))) => true,
-
-            Library::Prelude(_) if target.is_none() => true,
-
-            _ => false,
+    fn resolve_native_val(
+        &mut self,
+        target: Option<Value>,
+        property_name: &String,
+    ) -> Option<Value> {
+        let lib = self.native_libs.iter_mut().find(|lib| {
+            matches!(
+                (lib, &target),
+                (Library::Number(_), Some(Value::Number(_)))
+                    | (Library::String(_), Some(Value::String(_)))
+                    | (Library::List(_), Some(Value::List(_)))
+                    | (Library::Range(_), Some(Value::Range(_, _)))
+                    | (Library::Prelude(_), None)
+            )
         })?;
 
-        let fun_rc = match lib {
-            Library::Number(num_lib) => num_lib.get_function(property_name)?,
+        let fun_val = match lib {
+            Library::Number(num_lib) => num_lib.get_item(property_name)?,
 
-            Library::String(string_lib) => string_lib.get_function(property_name)?,
+            Library::String(string_lib) => string_lib.get_item(property_name)?,
 
-            Library::List(list_lib) => list_lib.get_function(property_name)?,
+            Library::List(list_lib) => list_lib.get_item(property_name)?,
 
-            Library::Range(range_lib) => range_lib.get_function(property_name)?,
+            Library::Range(range_lib) => range_lib.get_item(property_name)?,
 
-            Library::Prelude(prlelude_lib) => prlelude_lib.get_function(property_name)?,
+            Library::Prelude(prlelude_lib) => prlelude_lib.get_item(property_name)?,
 
             _ => return None,
         };
 
-        Some(Value::NativeFunction(target.map(Box::new), fun_rc))
+        match fun_val {
+            Value::NativeFunction(_, native_fun) => {
+                Some(Value::NativeFunction(target.map(Box::new), native_fun))
+            }
+
+            _ => None,
+        }
+    }
+    // returns Err(()) when no module
+    fn resolve_native_module(
+        &mut self,
+        mod_name: &String,
+        item_name: Option<&String>,
+    ) -> std::result::Result<Option<Value>, ()> {
+        let lib_opt = self
+            .native_libs
+            .iter_mut()
+            .find(|lib| matches!((lib, &**mod_name), (Library::Standard(_), "std")));
+
+        // if module not found
+        if lib_opt.is_none() {
+            return Err(());
+        }
+
+        match (lib_opt.unwrap(), item_name) {
+            (Library::Standard(std_lib), Some(name)) => Ok(std_lib.get_item(name)),
+
+            (Library::Standard(std_lib), None) => {
+                let module = Module::new_native(mod_name.to_owned(), Box::new(std_lib.to_owned()));
+
+                Ok(Some(Value::Module(Rc::new(RefCell::new(module)))))
+            }
+
+            _ => Err(()),
+        }
+    }
+    fn run_module(
+        &mut self,
+        mod_path: &str,
+        mod_name: &String,
+        item_tok: Option<&Token>,
+        path_token: &Token,
+    ) -> Result<Value> {
+        let mut sigma = Sigma::new();
+
+        let item_name = match &item_tok {
+            Some(tok) => match &tok.token_type {
+                Identifier(name) => Some(name),
+                _ => unreachable!(),
+            },
+
+            None => None,
+        };
+
+        match sigma.run_file(mod_path) {
+            Ok(_) => {
+                let exports = sigma.interpreter.environment.borrow().deconstruct();
+
+                let module = Module::new(mod_name.clone(), exports);
+
+                Ok(Value::Module(Rc::new(RefCell::new(module))))
+            }
+
+            // if there were errors executing the file
+            Err(_) if sigma.had_error => Err(Error::new(
+                ErrorKind::Fatal(ImportError),
+                "Aborting due to previous errors.".to_string(),
+                path_token,
+            )),
+
+            // if file not found
+            Err(_) => match self.resolve_native_module(mod_name, item_name) {
+                Ok(Some(mod_val)) => Ok(mod_val),
+
+                // unwrap() is okay because the functions can't return Ok(_) if item_name is none
+                Ok(None) => Err(Error::new(
+                    ErrorKind::Fatal(ImportError),
+                    format!(
+                        "No item `{}` found in module `{}`.",
+                        item_name.unwrap(),
+                        mod_name
+                    ),
+                    item_tok.unwrap(),
+                )),
+
+                Err(_) => Err(Error::new(
+                    ErrorKind::Fatal(ImportError),
+                    format!("No module named `{}` found.", mod_name),
+                    path_token,
+                )),
+            },
+        }
     }
 }

@@ -6,6 +6,7 @@ use std::io::Write;
 
 #[derive(Debug)]
 pub enum FatalKind {
+    ImportError,
     SyntaxError,
     ParseError,
     UnexpectedToken,
@@ -47,6 +48,9 @@ impl fmt::Display for Error {
         };
         let mut print_err = match &self.err_kind {
             ErrorKind::Fatal(fatal) => match fatal {
+                FatalKind::ImportError => {
+                    format!("\x1b[1;91mImportError:\x1b[0m {}", message)
+                }
                 FatalKind::SyntaxError => {
                     format!("\x1b[1;91mSyntaxError:\x1b[0m {}", message)
                 }

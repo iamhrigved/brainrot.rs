@@ -10,8 +10,8 @@ use crate::interpreter::Interpreter;
 use crate::parser::Parser;
 
 pub struct Sigma {
-    interpreter: Interpreter,
-    had_error: bool,
+    pub interpreter: Interpreter,
+    pub had_error: bool,
 }
 
 impl Sigma {
@@ -23,13 +23,20 @@ impl Sigma {
         }
     }
 
-    pub fn run_file(&mut self, file_path: &str) {
-        let file_contents = fs::read_to_string(file_path)
-            .expect("No such file or directory!")
-            .trim()
-            .to_string();
+    pub fn run_file(&mut self, file_path: &str) -> Result<(), ()> {
+        let file_contents = match fs::read_to_string(file_path) {
+            Ok(file) => file.trim().to_string(),
+
+            Err(_) => return Err(()),
+        };
 
         self.run(&file_contents);
+
+        if self.had_error {
+            Err(())
+        } else {
+            Ok(())
+        }
     }
 
     pub fn run_prompt(&mut self) {
@@ -75,6 +82,7 @@ impl Sigma {
         for stmt in &stmts {
             if let Err(err) = self.interpreter.interpret_statement(stmt) {
                 err.display(source.lines().nth(err.pos.0 - 1).unwrap());
+                self.had_error = true;
                 break;
             }
         }

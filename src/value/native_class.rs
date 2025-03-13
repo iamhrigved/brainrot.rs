@@ -1,46 +1,21 @@
-use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use super::{instance::Instance, Value};
-
-pub trait NativeInstanceData: Any {
-    fn as_any_ref(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-    fn box_clone(&self) -> Box<dyn NativeInstanceData>;
-}
-
-impl<T: Any + Clone> NativeInstanceData for T {
-    fn as_any_ref(&self) -> &dyn Any {
-        self
-    }
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-    fn box_clone(&self) -> Box<dyn NativeInstanceData> {
-        Box::new(self.clone())
-    }
-}
-
-impl Clone for Box<dyn NativeInstanceData> {
-    fn clone(&self) -> Self {
-        self.box_clone()
-    }
-}
+use super::{instance::Instance, NativeData, Value};
 
 #[derive(Clone)]
 pub struct NativeClass {
     pub name: String,
     pub properties: HashMap<String, Value>,
-    pub data_creator: Option<fn() -> Box<dyn NativeInstanceData>>,
+    pub data_creator: Option<fn() -> Box<dyn NativeData>>,
 }
 
 impl NativeClass {
     pub fn new(
         name: String,
         properties: HashMap<String, Value>,
-        data_creator: Option<fn() -> Box<dyn NativeInstanceData>>,
+        data_creator: Option<fn() -> Box<dyn NativeData>>,
     ) -> Self {
         Self {
             name,

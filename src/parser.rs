@@ -16,11 +16,12 @@ pub enum Expr {
     Binary(Box<Expr>, Token, Box<Expr>),
     Logical(Box<Expr>, Token, Box<Expr>),
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
-    Range(Box<Expr>, Token, Box<Expr>), // expr..expr
-    Call(Box<Expr>, Vec<Expr>, Token),  // expr, args and variable token (if available) for error
-    Get(Box<Expr>, Token),              // target, field
-    Set(Box<Expr>, Token, Box<Expr>),   // target, field, expression
-    ClassGet(Box<Expr>, Token),         // target class, field
+    Range(Box<Expr>, Token, Box<Expr>),   // expr..expr
+    Call(Box<Expr>, Vec<Expr>, Token),    // expr, args and variable token (if available) for error
+    Get(Box<Expr>, Token),                // target, field
+    Set(Box<Expr>, Token, Box<Expr>),     // target, field, expression
+    PathGet(Box<Expr>, Token),            // the `::` operator (set)
+    PathSet(Box<Expr>, Token, Box<Expr>), // the `::` operator (get)
     Closure(Vec<String>, Vec<(String, Expr)>, bool, Box<Stmt>),
     Literal(Value),
     Group(Box<Expr>),
@@ -61,7 +62,8 @@ impl std::fmt::Display for Expr {
             }
             Self::Get(expr, field) => format!("{}.{}", expr, field),
             Self::Set(expr, field, value) => format!("{}.{} = {}", expr, field, value),
-            Self::ClassGet(expr, field) => format!("{}::{}", expr, field),
+            Self::PathGet(expr, field) => format!("{}::{}", expr, field),
+            Self::PathSet(expr, field, value) => format!("{}::{} = {}", expr, field, value),
             Self::Closure(args, default_args, has_varargs, _) => {
                 let mut args_string = String::new();
 
@@ -121,7 +123,8 @@ pub enum Stmt {
     Throw(Token, Option<Expr>),
     If(Expr, Box<Stmt>, Option<Box<Stmt>>),
     Print(Expr),
-    //Import(Token, String),
+    Include(Token, Option<String>), // include module as mymodule
+    FromInclude(Token, Vec<(Token, Option<String>)>), // from module include class1 as c1, class2 as c2
     For(Option<Box<Stmt>>, Option<Expr>, Option<Expr>, Box<Stmt>),
     ForIn(Token, String, Expr, Box<Stmt>), // for, var, expr, stmt
     While(Expr, Box<Stmt>),
@@ -271,15 +274,10 @@ impl<'a> Parser<'a> {
             stmts.push(decl);
         }
 
-        self.consume_token();
-
-        if self.cur_token.token_type == Eof {
+        if self.match_next(&[RightBrace]).is_none() {
             return Err(Error::new_without_token(
                 ErrorKind::Fatal(UnterminatedBlock),
-                format!(
-                    "Expected `}}` after class declaration. Found `{}` ",
-                    self.cur_token
-                ),
+                "Expected `}` after class declaration. Found `Eof` ".to_string(),
                 (self.cur_token.pos.0, self.cur_token.pos.1 - 1),
                 // go back 1 char because Eof is outside of the program text
                 self.cur_token.to_string().len(),
@@ -340,6 +338,7 @@ impl<'a> Parser<'a> {
 
         match self.consume_token() {
             t if matches!(t.token_type, Semicolon | RN) => Ok(Stmt::VarDecl(var_name, initializer)),
+
             t => Err(Error::new(
                 ErrorKind::Fatal(ParseError),
                 format!("Expected `;` before this Token. Found `{}`.", t),
@@ -350,6 +349,8 @@ impl<'a> Parser<'a> {
 
     fn statement(&mut self) -> Result<Stmt> {
         match self.cur_token.token_type {
+            Include => self.include_statement(),
+            From => self.from_include_statement(),
             Try | FkAround => self.try_statement(),
             If | AightBet => self.if_statement(),
             Print | Spit => self.print_statement(),
@@ -370,6 +371,154 @@ impl<'a> Parser<'a> {
 
         match self.consume_token() {
             t if matches!(t.token_type, Semicolon | RN) => Ok(Stmt::Expression(expr)),
+            t => Err(Error::new(
+                ErrorKind::Fatal(ParseError),
+                format!("Expected `;` before this Token. Found `{}`.", t),
+                &t,
+            )),
+        }
+    }
+
+    fn include_statement(&mut self) -> Result<Stmt> {
+        self.consume_token(); // consume the `include`
+
+        let mut requires_var = false;
+
+        let module_path = match &self.cur_token.token_type {
+            Identifier(_) => self.consume_token(),
+
+            String(_) => {
+                requires_var = true;
+                self.consume_token()
+            }
+
+            tok => {
+                return Err(Error::new(
+                    ErrorKind::Fatal(SyntaxError),
+                    format!("Expected the name of the module. Found `{}`.", tok),
+                    &self.cur_token,
+                ))
+            }
+        };
+
+        let mut var_opt = None;
+        if self.match_next(&[As]).is_some() {
+            // if cur_token is not an identifier
+            if !matches!(self.cur_token.token_type, Identifier(_)) {
+                return Err(Error::new(
+                    ErrorKind::Fatal(SyntaxError),
+                    format!(
+                        "Expected variable name to store the module. Found `{}`.",
+                        self.cur_token
+                    ),
+                    &self.cur_token,
+                ));
+            }
+
+            var_opt = match self.consume_token().token_type {
+                Identifier(str) => Some(str),
+
+                _ => unreachable!(),
+            }
+        } else if requires_var {
+            return Err(Error::new(
+                ErrorKind::Fatal(ParseError),
+                format!(
+                    "A variable name is expected when using String as module. Found `{}`.",
+                    self.cur_token
+                ),
+                &self.cur_token,
+            ));
+        }
+
+        match self.consume_token() {
+            t if matches!(t.token_type, Semicolon | RN) => Ok(Stmt::Include(module_path, var_opt)),
+
+            t => Err(Error::new(
+                ErrorKind::Fatal(ParseError),
+                format!("Expected `;` before this Token. Found `{}`.", t),
+                &t,
+            )),
+        }
+    }
+
+    fn from_include_statement(&mut self) -> Result<Stmt> {
+        self.consume_token(); // consume the `from`
+
+        let module_path = match &self.cur_token.token_type {
+            Identifier(_) | String(_) => self.consume_token(),
+
+            tok => {
+                return Err(Error::new(
+                    ErrorKind::Fatal(SyntaxError),
+                    format!("Expected the name of the module. Found `{}`.", tok),
+                    &self.cur_token,
+                ))
+            }
+        };
+
+        if self.match_next(&[Include]).is_none() {
+            return Err(Error::new(
+                ErrorKind::Fatal(SyntaxError),
+                format!(
+                    "Expected `include` after module name. Found `{}`.",
+                    self.cur_token,
+                ),
+                &self.cur_token,
+            ));
+        }
+
+        let mut import_items = Vec::new();
+
+        loop {
+            let import_item_token = match &self.cur_token.token_type {
+                Identifier(_) => self.consume_token(),
+
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::Fatal(SyntaxError),
+                        format!(
+                            "Expected import item after `include`. Found `{}`.",
+                            self.cur_token
+                        ),
+                        &self.cur_token,
+                    ))
+                }
+            };
+
+            let mut var_opt = None;
+            if self.match_next(&[As]).is_some() {
+                // if cur_token is not an identifier
+                if !matches!(self.cur_token.token_type, Identifier(_)) {
+                    return Err(Error::new(
+                        ErrorKind::Fatal(SyntaxError),
+                        format!(
+                            "Expected variable name to store the module. Found `{}`.",
+                            self.cur_token
+                        ),
+                        &self.cur_token,
+                    ));
+                }
+
+                var_opt = match self.consume_token().token_type {
+                    Identifier(str) => Some(str),
+
+                    _ => unreachable!(),
+                }
+            }
+
+            import_items.push((import_item_token, var_opt));
+
+            if self.match_next(&[Comma]).is_none() {
+                break;
+            }
+        }
+
+        match self.consume_token() {
+            t if matches!(t.token_type, Semicolon | RN) => {
+                Ok(Stmt::FromInclude(module_path, import_items))
+            }
+
             t => Err(Error::new(
                 ErrorKind::Fatal(ParseError),
                 format!("Expected `;` before this Token. Found `{}`.", t),
@@ -705,7 +854,13 @@ impl<'a> Parser<'a> {
                     return Ok(Expr::Assign(Box::new(expr), op, Box::new(value)))
                 }
 
-                Expr::Get(target, field) => return Ok(Expr::Set(target, field, Box::new(value))),
+                Expr::Get(target, property) => {
+                    return Ok(Expr::Set(target, property, Box::new(value)))
+                }
+
+                Expr::PathGet(target, property) => {
+                    return Ok(Expr::PathSet(target, property, Box::new(value)))
+                }
 
                 _ => {
                     return Err(Error::new(
@@ -952,7 +1107,7 @@ impl<'a> Parser<'a> {
                         }
                     };
 
-                    expr = Expr::ClassGet(Box::new(expr), property);
+                    expr = Expr::PathGet(Box::new(expr), property);
                 }
 
                 _ => break,

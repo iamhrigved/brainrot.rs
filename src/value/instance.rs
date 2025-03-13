@@ -2,8 +2,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::native_class::NativeInstanceData;
-use super::{native_class::NativeClass, native_fun::NativeFun, sigma_class::SigmaClass, Value};
+use super::{native_class::NativeClass, sigma_class::SigmaClass, NativeData, Value};
 
 #[derive(Clone)]
 enum ClassType {
@@ -15,7 +14,7 @@ enum ClassType {
 pub struct Instance {
     name: Option<String>,
     class: ClassType,
-    data: Option<Box<dyn NativeInstanceData>>,
+    data: Option<Box<dyn NativeData>>,
 }
 
 impl Instance {
@@ -29,7 +28,7 @@ impl Instance {
     pub fn new_native(
         name: Option<String>,
         class: NativeClass,
-        data: Option<Box<dyn NativeInstanceData>>,
+        data: Option<Box<dyn NativeData>>,
     ) -> Self {
         Self {
             name,
@@ -38,10 +37,14 @@ impl Instance {
         }
     }
     pub fn get_data_mut(&mut self) -> Option<&mut dyn Any> {
-        self.data.as_mut().map(|data_box| data_box.as_any_mut())
+        self.data
+            .as_mut()
+            .map(|data_box| data_box.as_mut().as_any_mut())
     }
     pub fn get_data_ref(&self) -> Option<&dyn Any> {
-        self.data.as_ref().map(|data_box| data_box.as_any_ref())
+        self.data
+            .as_ref()
+            .map(|data_box| data_box.as_ref().as_any_ref())
     }
     pub fn get_property(&self, name: &String) -> Option<Value> {
         match &self.class {

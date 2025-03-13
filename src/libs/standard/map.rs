@@ -1,10 +1,12 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::error::{Error, ErrorKind, ExceptionKind::*};
 use crate::token::Token;
-use crate::value::{native_class::NativeClass, Value};
-use crate::value::{native_class::NativeInstanceData, native_fun::NativeFun};
+use crate::value::{
+    instance::Instance, native_class::NativeClass, native_fun::NativeFun, NativeData, Value,
+};
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -30,15 +32,15 @@ pub fn init_class() -> NativeClass {
         );
     };
 
-    insert("__new", (0, Some(0)), __new);
     insert("insert", (2, Some(2)), map_insert);
     insert("get", (1, Some(1)), map_get);
+    insert("remove", (1, Some(1)), map_remove);
 
     NativeClass::new("Error".to_string(), functions, Some(create_data))
 }
 
 // data initializer
-fn create_data() -> Box<dyn NativeInstanceData> {
+fn create_data() -> Box<dyn NativeData> {
     let hashmap: HashMap<Hashable, Value> = HashMap::with_capacity(4);
     Box::new(hashmap)
 }
@@ -77,9 +79,6 @@ fn get_key(val: Value, err_token: &Token) -> Result<Hashable> {
 }
 
 // FUNCTIONS
-fn __new(_args_val: Vec<Value>, _err_token: &Token) -> Result<Value> {
-    Ok(Value::Nil)
-}
 fn map_insert(mut args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
     let instance_rc = match &args_val[0] {
         Value::Instance(instance_rc) => Rc::clone(instance_rc),
@@ -112,4 +111,19 @@ fn map_get(mut args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
     let hashmap = data_mut.downcast_ref::<HashMap<Hashable, Value>>().unwrap();
 
     Ok(hashmap.get(&key).cloned().unwrap_or(Value::Nil))
+}
+fn map_remove(mut args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
+    let instance_rc = match &args_val[0] {
+        Value::Instance(instance_rc) => Rc::clone(instance_rc),
+        _ => unreachable!(),
+    };
+
+    let key = get_key(args_val.pop().unwrap(), err_token)?;
+
+    let mut instance = instance_rc.borrow_mut();
+
+    let data_mut = instance.get_data_mut().unwrap();
+    let hashmap = data_mut.downcast_mut::<HashMap<Hashable, Value>>().unwrap();
+
+    Ok(hashmap.remove(&key).unwrap_or(Value::Nil))
 }

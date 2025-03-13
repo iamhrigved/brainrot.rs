@@ -1,18 +1,45 @@
+use std::any::Any;
 use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
 pub mod instance;
+pub mod module;
 pub mod native_class;
 pub mod native_fun;
 pub mod sigma_class;
 pub mod sigma_fun;
 
 use instance::Instance;
+use module::Module;
 use native_class::NativeClass;
 use native_fun::NativeFun;
 use sigma_class::SigmaClass;
 use sigma_fun::SigmaFun;
+
+pub trait NativeData: Any {
+    fn as_any_ref(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn box_clone(&self) -> Box<dyn NativeData>;
+}
+
+impl<T: Any + Clone> NativeData for T {
+    fn as_any_ref(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn box_clone(&self) -> Box<dyn NativeData> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn NativeData> {
+    fn clone(&self) -> Self {
+        self.box_clone()
+    }
+}
 
 // only List and Instance require RefCell<T>
 pub enum Value {
@@ -25,6 +52,7 @@ pub enum Value {
     Class(Rc<SigmaClass>),
     NativeClass(Rc<NativeClass>),
     Instance(Rc<RefCell<Instance>>),
+    Module(Rc<RefCell<Module>>),
     Exception(String),
     Function(Rc<SigmaFun>),
     NativeFunction(Option<Box<Value>>, Rc<NativeFun>), // self and function
@@ -44,6 +72,7 @@ impl Clone for Value {
             }
             Value::Class(class_rc) => Value::Class(Rc::clone(class_rc)),
             Value::NativeClass(class_rc) => Value::NativeClass(Rc::clone(class_rc)),
+            Value::Module(mod_rc) => Value::Module(Rc::clone(mod_rc)),
 
             Value::Number(num) => Value::Number(*num),
             Value::Boolean(bool) => Value::Boolean(*bool),
@@ -69,7 +98,7 @@ impl Value {
             Value::Class(class_rc) => Value::Class(Rc::new(class_rc.as_ref().clone())),
             Value::Function(fun_rc) => Value::Function(Rc::new(fun_rc.as_ref().clone())),
 
-            // Never deep-clone native functions and classes
+            // Never deep-clone native functions, classes and modules
             Value::NativeClass(class_rc) => Value::NativeClass(Rc::clone(class_rc)),
             Value::NativeFunction(self_opt, lib_fun_rc) => Value::NativeFunction(
                 // deep clone the self value
@@ -79,6 +108,7 @@ impl Value {
                 // never deep clone a lib function
                 Rc::clone(lib_fun_rc),
             ),
+            Value::Module(mod_rc) => Value::Module(Rc::clone(mod_rc)),
 
             Value::Number(num) => Value::Number(*num),
             Value::Boolean(bool) => Value::Boolean(*bool),
@@ -126,6 +156,7 @@ impl fmt::Display for Value {
             Self::Exception(exception_message) => exception_message.to_string(),
             Self::Function(sigma_fun) => sigma_fun.as_ref().to_string(),
             Self::NativeFunction(_, fun_rc) => fun_rc.as_ref().to_string(),
+            Self::Module(mod_rc) => mod_rc.borrow().to_string(),
             Self::Nil => "Nil".to_string(),
         };
         write!(f, "{}", val)
@@ -143,6 +174,7 @@ impl fmt::Debug for Value {
             Self::Class(class_rc) => &class_rc.as_ref().to_string(),
             Self::NativeClass(class_rc) => &class_rc.as_ref().to_string(),
             Self::Instance(instance_rc) => &instance_rc.borrow().to_string(),
+            Self::Module(mod_rc) => &mod_rc.borrow().to_string(),
             Self::Function(_) => "Function",
             Self::NativeFunction(_, _) => "NativeFunction",
             Self::Exception(_) => "Exception",

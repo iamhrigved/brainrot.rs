@@ -36,6 +36,8 @@ impl<'a> Scanner<'a> {
         insert(Boolean(false));
         insert(And);
         insert(Or);
+        insert(From);
+        insert(Include);
         insert(Try);
         insert(Catch);
         insert(Throw);

@@ -44,6 +44,22 @@ impl Environment {
 
         Rc::new(RefCell::new(global_env))
     }
+    pub fn deconstruct(&self) -> HashMap<String, Value> {
+        let mut exports: HashMap<String, Value> = self
+            .variables
+            .clone()
+            .into_iter()
+            .filter_map(|(key, val_opt)| val_opt.map(|val| (key, val)))
+            .collect();
+
+        if let Some(enclosing) = &self.enclosing {
+            let parent_exports = enclosing.borrow().deconstruct();
+
+            exports.extend(parent_exports);
+        };
+
+        exports
+    }
 
     fn new_inside(enclosing: Rc<RefCell<Environment>>, env_type: EnvType) -> Rc<RefCell<Self>> {
         let mut in_loop = enclosing.borrow().in_loop;

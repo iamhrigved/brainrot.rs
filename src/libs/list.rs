@@ -1,31 +1,31 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::NativeFunLib;
+use super::NativeLib;
 
-use crate::value::sigma_fun::SigmaFun;
-use crate::value::{native_fun::NativeFun, Value};
+use crate::value::{native_fun::NativeFun, sigma_fun::SigmaFun, Value};
 
 use crate::error::{Error, ErrorKind, ExceptionKind::*};
 use crate::token::Token;
 
 type Result<T> = std::result::Result<T, Error>;
 
+#[derive(Clone)]
 pub struct ListLib {
-    loaded_functions: Vec<Rc<NativeFun>>,
+    loaded_functions: Vec<Value>,
 }
 
-impl NativeFunLib for ListLib {
-    fn get_loaded(&self) -> &Vec<Rc<NativeFun>> {
+impl NativeLib for ListLib {
+    fn get_loaded(&self) -> &Vec<Value> {
         &self.loaded_functions
     }
 
-    fn get_loaded_mut(&mut self) -> &mut Vec<Rc<NativeFun>> {
+    fn get_loaded_mut(&mut self) -> &mut Vec<Value> {
         &mut self.loaded_functions
     }
 
     #[rustfmt::skip]
-    fn match_function(&self, fun_name: &str) -> Option<NativeFun> {
+    fn match_item(&self, fun_name: &str) -> Option<Value> {
         let fun = match fun_name {
             "len" => NativeFun::new("len", (0, Some(0)), Self::len),
             "is_empty" => NativeFun::new("is_emtpy", (0, Some(0)), Self::is_empty),
@@ -48,7 +48,7 @@ impl NativeFunLib for ListLib {
             _ => return None,
         };
 
-        Some(fun)
+        Some(Value::NativeFunction(None, Rc::new(fun)))
     }
 }
 

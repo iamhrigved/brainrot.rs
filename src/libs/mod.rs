@@ -1,65 +1,58 @@
-use std::rc::Rc;
-
-pub mod class;
 pub mod list;
 pub mod number;
 pub mod prelude;
 pub mod range;
+pub mod standard;
 pub mod string;
 
-use crate::value::native_fun::NativeFun;
+use crate::value::Value;
 
-use class::ClassLib;
 use list::ListLib;
 use number::NumberLib;
 use prelude::Prelude;
 use range::RangeLib;
+use standard::StdLib;
 use string::StringLib;
 
-pub trait NativeFunLib {
+pub trait NativeLib {
     // get a reference to the current loaded functions vector
-    fn get_loaded(&self) -> &Vec<Rc<NativeFun>>;
-    fn get_loaded_mut(&mut self) -> &mut Vec<Rc<NativeFun>>;
+    fn get_loaded(&self) -> &Vec<Value>;
+    fn get_loaded_mut(&mut self) -> &mut Vec<Value>;
 
     // function which gets the function-objects
-    fn match_function(&self, fun_name: &str) -> Option<NativeFun>;
+    fn match_item(&self, item_name: &str) -> Option<Value>;
 
-    fn get_function(&mut self, fun_name: &String) -> Option<Rc<NativeFun>> {
-        let loaded_fun_pos = self
-            .get_loaded()
-            .iter()
-            .position(|fun_rc| &fun_rc.name == fun_name);
+    fn get_item(&mut self, item_name: &String) -> Option<Value> {
+        let loaded_fun_pos = self.get_loaded().iter().position(|val| match val {
+            Value::NativeFunction(_, fun) => &fun.name == item_name,
+
+            Value::NativeClass(class) => &class.name == item_name,
+
+            _ => false,
+        });
 
         if let Some(index) = loaded_fun_pos {
             return self.get_loaded().get(index).cloned();
         }
 
-        self.match_function(fun_name).map(|fun| self.load_fun(fun))
+        self.match_item(item_name).map(|fun| self.load_fun(fun))
     }
 
-    fn load_fun(&mut self, native_fun: NativeFun) -> Rc<NativeFun> {
-        let fun_rc = Rc::new(native_fun);
+    fn load_fun(&mut self, val: Value) -> Value {
+        self.get_loaded_mut().push(val.clone());
 
-        self.get_loaded_mut().push(Rc::clone(&fun_rc));
-
-        fun_rc
+        val
     }
 }
 
-//pub enum FunLib {
-//    Number(NumberLib),
-//    String(StringLib),
-//    List(ListLib),
-//    Range(RangeLib),
-//}
-
+#[derive(Clone)]
 pub enum Library {
     Number(NumberLib),
     String(StringLib),
     List(ListLib),
     Range(RangeLib),
     Prelude(Prelude),
-    Class(ClassLib),
+    Standard(StdLib),
 }
 
 impl Library {
@@ -69,10 +62,15 @@ impl Library {
         let strign_lib = Library::String(StringLib::new());
         let list_lib = Library::List(ListLib::new());
         let range_lib = Library::Range(RangeLib::new());
-        let class_lib = Library::Class(ClassLib::new());
+        let standard_lib = Library::Standard(StdLib::new());
 
         vec![
-            prelude, number_lib, strign_lib, list_lib, range_lib, class_lib,
+            prelude,
+            number_lib,
+            strign_lib,
+            list_lib,
+            range_lib,
+            standard_lib,
         ]
     }
 }

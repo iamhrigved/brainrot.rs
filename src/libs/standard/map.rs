@@ -4,9 +4,7 @@ use std::rc::Rc;
 
 use crate::error::{Error, ErrorKind, ExceptionKind::*};
 use crate::token::Token;
-use crate::value::{
-    instance::Instance, native_class::NativeClass, native_fun::NativeFun, NativeData, Value,
-};
+use crate::value::{native_class::NativeClass, native_fun::NativeFun, NativeData, Value};
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -35,8 +33,14 @@ pub fn init_class() -> NativeClass {
     insert("insert", (2, Some(2)), map_insert);
     insert("get", (1, Some(1)), map_get);
     insert("remove", (1, Some(1)), map_remove);
+    insert("contains_key", (1, Some(1)), map_contains_key);
+    insert("len", (0, Some(0)), map_len);
+    insert("is_empty", (0, Some(0)), map_is_empty);
+    insert("clear", (0, Some(0)), map_clear);
+    insert("keys", (0, Some(0)), map_keys);
+    insert("values", (0, Some(0)), map_values);
 
-    NativeClass::new("Error".to_string(), functions, Some(create_data))
+    NativeClass::new("Map".to_string(), functions, Some(create_data))
 }
 
 // data initializer
@@ -46,7 +50,7 @@ fn create_data() -> Box<dyn NativeData> {
 }
 
 // HELPER FUNCTIONS
-fn get_key(val: Value, err_token: &Token) -> Result<Hashable> {
+fn val_to_key(val: Value, err_token: &Token) -> Result<Hashable> {
     let key = match val {
         Value::String(str) => Hashable::String(str),
         Value::Boolean(bool) => Hashable::Boolean(bool),
@@ -77,6 +81,19 @@ fn get_key(val: Value, err_token: &Token) -> Result<Hashable> {
 
     Ok(key)
 }
+fn key_to_val(key: Hashable) -> Value {
+    match key {
+        Hashable::Number(int, fract) => {
+            let fract_dec = fract as f64 / (fract.ilog10() + 1) as f64;
+
+            Value::Number(int as f64 + fract_dec)
+        }
+
+        Hashable::String(str) => Value::String(str),
+
+        Hashable::Boolean(bool) => Value::Boolean(bool),
+    }
+}
 
 // FUNCTIONS
 fn map_insert(mut args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
@@ -87,7 +104,7 @@ fn map_insert(mut args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
 
     let val = args_val.pop().unwrap();
 
-    let key = get_key(args_val.pop().unwrap(), err_token)?;
+    let key = val_to_key(args_val.pop().unwrap(), err_token)?;
 
     let mut instance = instance_rc.borrow_mut();
 
@@ -103,7 +120,7 @@ fn map_get(mut args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
         _ => unreachable!(),
     };
 
-    let key = get_key(args_val.pop().unwrap(), err_token)?;
+    let key = val_to_key(args_val.pop().unwrap(), err_token)?;
 
     let instance = instance_rc.borrow();
 
@@ -118,7 +135,7 @@ fn map_remove(mut args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
         _ => unreachable!(),
     };
 
-    let key = get_key(args_val.pop().unwrap(), err_token)?;
+    let key = val_to_key(args_val.pop().unwrap(), err_token)?;
 
     let mut instance = instance_rc.borrow_mut();
 
@@ -126,4 +143,92 @@ fn map_remove(mut args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
     let hashmap = data_mut.downcast_mut::<HashMap<Hashable, Value>>().unwrap();
 
     Ok(hashmap.remove(&key).unwrap_or(Value::Nil))
+}
+fn map_contains_key(mut args_val: Vec<Value>, err_token: &Token) -> Result<Value> {
+    let instance_rc = match &args_val[0] {
+        Value::Instance(instance_rc) => Rc::clone(instance_rc),
+        _ => unreachable!(),
+    };
+
+    let key = val_to_key(args_val.pop().unwrap(), err_token)?;
+
+    let instance = instance_rc.borrow();
+
+    let data_ref = instance.get_data_ref().unwrap();
+    let hashmap = data_ref.downcast_ref::<HashMap<Hashable, Value>>().unwrap();
+
+    Ok(Value::Boolean(hashmap.contains_key(&key)))
+}
+fn map_len(args_val: Vec<Value>, _err_token: &Token) -> Result<Value> {
+    let instance_rc = match &args_val[0] {
+        Value::Instance(instance_rc) => Rc::clone(instance_rc),
+        _ => unreachable!(),
+    };
+
+    let instance = instance_rc.borrow();
+
+    let data_ref = instance.get_data_ref().unwrap();
+    let hashmap = data_ref.downcast_ref::<HashMap<Hashable, Value>>().unwrap();
+
+    Ok(Value::Number(hashmap.len() as f64))
+}
+fn map_is_empty(args_val: Vec<Value>, _err_token: &Token) -> Result<Value> {
+    let instance_rc = match &args_val[0] {
+        Value::Instance(instance_rc) => Rc::clone(instance_rc),
+        _ => unreachable!(),
+    };
+
+    let instance = instance_rc.borrow();
+
+    let data_ref = instance.get_data_ref().unwrap();
+    let hashmap = data_ref.downcast_ref::<HashMap<Hashable, Value>>().unwrap();
+
+    Ok(Value::Boolean(hashmap.is_empty()))
+}
+fn map_clear(args_val: Vec<Value>, _err_token: &Token) -> Result<Value> {
+    let instance_rc = match &args_val[0] {
+        Value::Instance(instance_rc) => Rc::clone(instance_rc),
+        _ => unreachable!(),
+    };
+
+    let mut instance = instance_rc.borrow_mut();
+
+    let data_mut = instance.get_data_mut().unwrap();
+    let hashmap = data_mut.downcast_mut::<HashMap<Hashable, Value>>().unwrap();
+
+    hashmap.clear();
+
+    Ok(Value::Nil)
+}
+fn map_keys(args_val: Vec<Value>, _err_token: &Token) -> Result<Value> {
+    let instance_rc = match &args_val[0] {
+        Value::Instance(instance_rc) => Rc::clone(instance_rc),
+        _ => unreachable!(),
+    };
+
+    let instance = instance_rc.borrow();
+
+    let data_mut = instance.get_data_ref().unwrap();
+    let hashmap = data_mut.downcast_ref::<HashMap<Hashable, Value>>().unwrap();
+
+    let keys_list = hashmap.keys().cloned().map(key_to_val).collect();
+    let list_rc = Rc::new(RefCell::new(keys_list));
+
+    Ok(Value::List(list_rc))
+}
+fn map_values(args_val: Vec<Value>, _err_token: &Token) -> Result<Value> {
+    let instance_rc = match &args_val[0] {
+        Value::Instance(instance_rc) => Rc::clone(instance_rc),
+        _ => unreachable!(),
+    };
+
+    let instance = instance_rc.borrow();
+
+    let data_mut = instance.get_data_ref().unwrap();
+    let hashmap = data_mut.downcast_ref::<HashMap<Hashable, Value>>().unwrap();
+
+    let values_list = hashmap.values().cloned().collect();
+    let list_rc = Rc::new(RefCell::new(values_list));
+
+    Ok(Value::List(list_rc))
 }

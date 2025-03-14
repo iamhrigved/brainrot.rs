@@ -9,6 +9,16 @@ use std::string::String;
 use crate::interpreter::Interpreter;
 use crate::parser::Parser;
 
+pub static mut CURRENT_FILENAME: String = String::new();
+
+// SAFETY: no multi-threading
+pub fn get_cur_filename() -> String {
+    unsafe { CURRENT_FILENAME.clone() }
+}
+pub fn set_cur_filename(new_filename: String) {
+    unsafe { CURRENT_FILENAME = new_filename }
+}
+
 pub struct Sigma {
     pub interpreter: Interpreter,
     pub had_error: bool,
@@ -29,6 +39,8 @@ impl Sigma {
 
             Err(_) => return Err(()),
         };
+
+        set_cur_filename(file_path.to_string());
 
         self.run(&file_contents);
 

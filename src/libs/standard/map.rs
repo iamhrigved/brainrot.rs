@@ -84,7 +84,13 @@ fn val_to_key(val: Value, err_token: &Token) -> Result<Hashable> {
 fn key_to_val(key: Hashable) -> Value {
     match key {
         Hashable::Number(int, fract) => {
-            let fract_dec = fract as f64 / (fract.ilog10() + 1) as f64;
+            println!("fract: {}", fract);
+            let num_of_digits = match fract {
+                0 => 1.0,
+                _ => fract.ilog10() as f64 + 1.0,
+            };
+
+            let fract_dec = fract as f64 / num_of_digits;
 
             Value::Number(int as f64 + fract_dec)
         }

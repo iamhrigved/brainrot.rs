@@ -10,7 +10,7 @@ use crate::environment::Environment;
 use crate::error::{Error, ErrorKind, ExceptionKind, FatalKind::*};
 use crate::libs::{Library, NativeLib};
 use crate::parser::{Expr, Stmt};
-use crate::sigma::Sigma;
+use crate::sigma::{get_cur_filename, set_cur_filename, Sigma};
 use crate::token::{Token, TokenType, TokenType::*};
 use crate::value::native_fun::NativeFun;
 use crate::value::{
@@ -1005,7 +1005,7 @@ impl Interpreter {
     ) -> Result<Value> {
         self.check_arity(false, fun_rc.arity, args.len(), err_token)?;
 
-        // get arguments
+        // get argument
         let mut args_val = Vec::with_capacity(4);
 
         for arg in args {
@@ -1506,43 +1506,74 @@ impl Interpreter {
             None => None,
         };
 
+        let old_filename = get_cur_filename().to_string();
+
+        set_cur_filename(mod_path.to_string());
+
         match sigma.run_file(mod_path) {
             Ok(_) => {
                 let exports = sigma.interpreter.environment.borrow().deconstruct();
 
+                if let Some(item_tok) = item_tok {
+                    let item_name = match &item_tok.token_type {
+                        Identifier(str) => str,
+                        _ => unreachable!(),
+                    };
+
+                    return exports.get(item_name).cloned().ok_or(Error::new(
+                        ErrorKind::Fatal(ImportError),
+                        format!(
+                            "No item `{}` found in the module `{}`.",
+                            item_name, mod_name
+                        ),
+                        item_tok,
+                    ));
+                }
+
                 let module = Module::new(mod_name.clone(), exports);
+
+                set_cur_filename(old_filename);
 
                 Ok(Value::Module(Rc::new(RefCell::new(module))))
             }
 
             // if there were errors executing the file
-            Err(_) if sigma.had_error => Err(Error::new(
-                ErrorKind::Fatal(ImportError),
-                "Aborting due to previous errors.".to_string(),
-                path_token,
-            )),
+            Err(_) if sigma.had_error => {
+                set_cur_filename(old_filename);
+
+                Err(Error::new(
+                    ErrorKind::Fatal(ImportError),
+                    "Aborting due to previous errors.".to_string(),
+                    path_token,
+                ))
+            }
 
             // if file not found
-            Err(_) => match self.resolve_native_module(mod_name, item_name) {
-                Ok(Some(mod_val)) => Ok(mod_val),
+            Err(_) => {
+                set_cur_filename(old_filename);
 
-                // unwrap() is okay because the functions can't return Ok(_) if item_name is none
-                Ok(None) => Err(Error::new(
-                    ErrorKind::Fatal(ImportError),
-                    format!(
-                        "No item `{}` found in module `{}`.",
-                        item_name.unwrap(),
-                        mod_name
-                    ),
-                    item_tok.unwrap(),
-                )),
+                match self.resolve_native_module(mod_name, item_name) {
+                    Ok(Some(mod_val)) => Ok(mod_val),
 
-                Err(_) => Err(Error::new(
-                    ErrorKind::Fatal(ImportError),
-                    format!("No module named `{}` found.", mod_name),
-                    path_token,
-                )),
-            },
+                    // Ok(None) is only possible when the module is found but the item is not found
+                    Ok(None) => Err(Error::new(
+                        ErrorKind::Fatal(ImportError),
+                        format!(
+                            "No item `{}` found in module `{}`.",
+                            item_name.unwrap(),
+                            mod_name
+                        ),
+                        item_tok.unwrap(),
+                    )),
+
+                    // Err(()) when the module is not found
+                    Err(_) => Err(Error::new(
+                        ErrorKind::Fatal(ImportError),
+                        format!("No module named `{}` found.", mod_name),
+                        path_token,
+                    )),
+                }
+            }
         }
     }
 }

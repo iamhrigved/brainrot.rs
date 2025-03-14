@@ -19,7 +19,7 @@ fn main() {
     let mut sigma = Sigma::new();
 
     if args.len() > 1 {
-        sigma.run_file(&args[1]);
+        let _ = sigma.run_file(&args[1]);
     } else {
         sigma.run_prompt();
     }

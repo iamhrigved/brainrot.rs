@@ -1,8 +1,9 @@
-use crate::token::Token;
-
 use core::fmt;
 use std::io;
 use std::io::Write;
+
+use crate::sigma::get_cur_filename;
+use crate::token::Token;
 
 #[derive(Debug)]
 pub enum FatalKind {
@@ -150,7 +151,12 @@ impl Error {
             print!(" ");
             io::stdout().flush().unwrap();
         }
-        println!("\x1b[1;94m-->\x1b[0m line {}:{}", linenum, colnum);
+        println!(
+            "\x1b[1;94m-->\x1b[0m {} {}:{}",
+            get_cur_filename(),
+            linenum,
+            colnum
+        );
 
         // print "|" character before the erroneous line
         for _ in 0..digits_line + 1 {

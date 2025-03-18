@@ -79,6 +79,7 @@ pub enum TokenType {
     While,
     Continue,
     Break,
+    LeftArrow,
 
     // Exceptions
     Error,
@@ -185,6 +186,7 @@ impl std::fmt::Display for TokenType {
             Self::While => "while",
             Self::Continue => "continue",
             Self::Break => "break",
+            Self::LeftArrow => "<-",
 
             // Exceptions
             Self::Error => "Error",

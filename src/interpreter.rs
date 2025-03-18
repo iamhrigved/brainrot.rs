@@ -52,7 +52,9 @@ impl Interpreter {
         match stmt {
             Stmt::Print(expr) => self.interpret_print_stmt(expr),
             Stmt::Expression(expr) => self.interpret_expr_stmt(expr),
-            Stmt::ClassDecl(name, declarations) => self.interpret_class_decl(name, declarations),
+            Stmt::ClassDecl(name, superclass_opt, declarations) => {
+                self.interpret_class_decl(name, superclass_opt.as_ref(), declarations)
+            }
             Stmt::FunDecl(_, _, _, _, _) => self.interpret_fun_decl(stmt),
             Stmt::VarDecl(name, expr_opt) => self.interpret_var_decl(name, expr_opt.as_ref()),
             Stmt::TryCatch(try_stmt, catch_stmts) => {
@@ -103,9 +105,33 @@ impl Interpreter {
     fn interpret_class_decl(
         &mut self,
         name: &String,
+        superclass_tok: Option<&Token>,
         declarations: &Vec<Stmt>,
     ) -> Result<Option<ControlFlow>> {
         let mut properties = HashMap::with_capacity(4);
+
+        // if superclass is given
+        let mut superclass_val_opt = None;
+        if let Some(tok) = superclass_tok {
+            let class_name = match &tok.token_type {
+                Identifier(str) => str,
+                _ => panic!(),
+            };
+
+            let superclass_val = match self.environment.borrow().get_var(class_name, tok)? {
+                val if matches!(val, Value::Class(_) | Value::NativeClass(_)) => val,
+
+                val => {
+                    return Err(Error::new(
+                        ErrorKind::Exception(ExceptionKind::TypeError),
+                        format!("Superclass should be a Class. Found {:?}.", val),
+                        tok,
+                    ))
+                }
+            };
+
+            superclass_val_opt = Some(superclass_val);
+        }
 
         // new environment for methods
         let new_env = Environment::new();
@@ -134,7 +160,37 @@ impl Interpreter {
             }
         }
 
-        let class = SigmaClass::new(name.to_owned(), properties);
+        let class = match superclass_val_opt {
+            // superclass is SigmaClass
+            Some(Value::Class(sigma_class)) => {
+                // define `super` in the class
+                let superclas_val = Value::Class(Rc::clone(&sigma_class));
+                new_env
+                    .borrow_mut()
+                    .define_var("super".to_string(), Some(superclas_val));
+
+                SigmaClass::new_subclass(name.to_owned(), sigma_class.as_ref().clone(), properties)
+            }
+
+            // superclass is NativeClass
+            Some(Value::NativeClass(native_class)) => {
+                // define `super` in the class
+                let superclas_val = Value::NativeClass(Rc::clone(&native_class));
+                new_env
+                    .borrow_mut()
+                    .define_var("super".to_string(), Some(superclas_val));
+
+                SigmaClass::new_subclass_native(
+                    name.to_owned(),
+                    native_class.as_ref().clone(),
+                    properties,
+                )
+            }
+
+            // no superclass
+            _ => SigmaClass::new(name.to_owned(), properties),
+        };
+
         let class_rc = Rc::new(class);
 
         // define `Me` type in the method environment (we have the RefCell mutable access)
@@ -547,6 +603,7 @@ impl Interpreter {
             Expr::Set(target, property, expr) => {
                 self.interpret_set_expr(target.as_ref(), property, expr.as_ref())
             }
+            Expr::Super(super_token, property) => self.interpret_super_expr(super_token, property),
         }
     }
     fn interpret_increment_expr(
@@ -1272,6 +1329,9 @@ impl Interpreter {
             .set_property(property_name.to_owned(), new_val.clone());
 
         Ok(new_val)
+    }
+    fn interpret_super_expr(&mut self, super_token: &Token, property: &Token) -> Result<Value> {
+        Ok(Value::Nil)
     }
 
     // HELPER FUNCTIONS

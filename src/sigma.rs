@@ -4,7 +4,6 @@
 use std::fs;
 use std::io;
 use std::io::Write;
-use std::string::String;
 
 use crate::interpreter::Interpreter;
 use crate::parser::Parser;

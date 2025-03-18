@@ -17,25 +17,25 @@ use native_fun::NativeFun;
 use sigma_class::SigmaClass;
 use sigma_fun::SigmaFun;
 
-pub trait NativeData: Any {
+pub trait NativeInstanceData: Any {
     fn as_any_ref(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
-    fn box_clone(&self) -> Box<dyn NativeData>;
+    fn box_clone(&self) -> Box<dyn NativeInstanceData>;
 }
 
-impl<T: Any + Clone> NativeData for T {
+impl<T: Any + Clone> NativeInstanceData for T {
     fn as_any_ref(&self) -> &dyn Any {
         self
     }
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
-    fn box_clone(&self) -> Box<dyn NativeData> {
+    fn box_clone(&self) -> Box<dyn NativeInstanceData> {
         Box::new(self.clone())
     }
 }
 
-impl Clone for Box<dyn NativeData> {
+impl Clone for Box<dyn NativeInstanceData> {
     fn clone(&self) -> Self {
         self.box_clone()
     }

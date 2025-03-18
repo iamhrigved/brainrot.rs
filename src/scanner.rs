@@ -210,6 +210,8 @@ impl<'a> Scanner<'a> {
             '<' => {
                 if self.match_next_char('=') {
                     Ok(LessEqual)
+                } else if self.match_next_char('-') {
+                    Ok(LeftArrow)
                 } else {
                     Ok(Less)
                 }

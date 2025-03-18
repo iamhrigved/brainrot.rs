@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::error::{Error, ErrorKind, ExceptionKind::*};
 use crate::token::Token;
-use crate::value::{native_class::NativeClass, native_fun::NativeFun, NativeData, Value};
+use crate::value::{native_class::NativeClass, native_fun::NativeFun, NativeInstanceData, Value};
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -44,7 +44,7 @@ pub fn init_class() -> NativeClass {
 }
 
 // data initializer
-fn create_data() -> Box<dyn NativeData> {
+fn create_data() -> Box<dyn NativeInstanceData> {
     let hashmap: HashMap<Hashable, Value> = HashMap::with_capacity(4);
     Box::new(hashmap)
 }

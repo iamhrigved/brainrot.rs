@@ -2,20 +2,20 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use super::{instance::Instance, NativeData, Value};
+use super::{instance::Instance, NativeInstanceData, Value};
 
 #[derive(Clone)]
 pub struct NativeClass {
     pub name: String,
     pub properties: HashMap<String, Value>,
-    pub data_creator: Option<fn() -> Box<dyn NativeData>>,
+    pub data_creator: Option<fn() -> Box<dyn NativeInstanceData>>,
 }
 
 impl NativeClass {
     pub fn new(
         name: String,
         properties: HashMap<String, Value>,
-        data_creator: Option<fn() -> Box<dyn NativeData>>,
+        data_creator: Option<fn() -> Box<dyn NativeInstanceData>>,
     ) -> Self {
         Self {
             name,

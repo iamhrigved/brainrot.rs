@@ -1,11 +1,16 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
-use super::{instance::Instance, Value};
-use std::collections::HashMap;
+use super::{
+    instance::{ClassType, Instance},
+    native_class::NativeClass,
+    Value,
+};
 
 pub struct SigmaClass {
     pub name: String,
+    superclass: Option<Box<ClassType>>,
     pub properties: HashMap<String, Value>,
 }
 
@@ -17,7 +22,33 @@ impl std::fmt::Display for SigmaClass {
 
 impl SigmaClass {
     pub fn new(name: String, properties: HashMap<String, Value>) -> Self {
-        Self { name, properties }
+        Self {
+            name,
+            superclass: None,
+            properties,
+        }
+    }
+    pub fn new_subclass(
+        name: String,
+        sigma_class: SigmaClass,
+        properties: HashMap<String, Value>,
+    ) -> Self {
+        Self {
+            name,
+            superclass: Some(Box::new(ClassType::Sigma(sigma_class))),
+            properties,
+        }
+    }
+    pub fn new_subclass_native(
+        name: String,
+        native_class: NativeClass,
+        properties: HashMap<String, Value>,
+    ) -> Self {
+        Self {
+            name,
+            superclass: Some(Box::new(ClassType::Native(native_class))),
+            properties,
+        }
     }
     pub fn get_property(&self, name: &String) -> Option<Value> {
         self.properties.get(name).cloned()
@@ -46,6 +77,12 @@ impl Clone for SigmaClass {
             properties.insert(name.clone(), val.deep_clone());
         });
 
-        Self { name, properties }
+        let superclass = self.superclass.clone();
+
+        Self {
+            name,
+            superclass,
+            properties,
+        }
     }
 }

@@ -2,10 +2,10 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::{native_class::NativeClass, sigma_class::SigmaClass, NativeData, Value};
+use super::{native_class::NativeClass, sigma_class::SigmaClass, NativeInstanceData, Value};
 
 #[derive(Clone)]
-enum ClassType {
+pub enum ClassType {
     Sigma(SigmaClass),
     Native(NativeClass),
 }
@@ -14,7 +14,7 @@ enum ClassType {
 pub struct Instance {
     name: Option<String>,
     class: ClassType,
-    data: Option<Box<dyn NativeData>>,
+    data: Option<Box<dyn NativeInstanceData>>,
 }
 
 impl Instance {
@@ -28,7 +28,7 @@ impl Instance {
     pub fn new_native(
         name: Option<String>,
         class: NativeClass,
-        data: Option<Box<dyn NativeData>>,
+        data: Option<Box<dyn NativeInstanceData>>,
     ) -> Self {
         Self {
             name,

@@ -22,6 +22,7 @@ pub enum Expr {
     Set(Box<Expr>, Token, Box<Expr>),     // target, field, expression
     PathGet(Box<Expr>, Token),            // the `::` operator (set)
     PathSet(Box<Expr>, Token, Box<Expr>), // the `::` operator (get)
+    Super(Token, Token),                  // the `super` and the method token
     Closure(Vec<String>, Vec<(String, Expr)>, bool, Box<Stmt>),
     Literal(Value),
     Group(Box<Expr>),
@@ -60,10 +61,11 @@ impl std::fmt::Display for Expr {
 
                 format!("{}({})", expr, args_string)
             }
-            Self::Get(expr, field) => format!("{}.{}", expr, field),
-            Self::Set(expr, field, value) => format!("{}.{} = {}", expr, field, value),
-            Self::PathGet(expr, field) => format!("{}::{}", expr, field),
-            Self::PathSet(expr, field, value) => format!("{}::{} = {}", expr, field, value),
+            Self::Get(expr, prop) => format!("{}.{}", expr, prop),
+            Self::Set(expr, prop, value) => format!("{}.{} = {}", expr, prop, value),
+            Self::PathGet(expr, prop) => format!("{}::{}", expr, prop),
+            Self::PathSet(expr, prop, value) => format!("{}::{} = {}", expr, prop, value),
+            Self::Super(sup, meth) => format!("{}.{}", sup, meth),
             Self::Closure(args, default_args, has_varargs, _) => {
                 let mut args_string = String::new();
 
@@ -108,7 +110,7 @@ impl std::fmt::Display for Expr {
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    ClassDecl(String, Vec<Stmt>),
+    ClassDecl(String, Option<Token>, Vec<Stmt>), // name, optional super-class, properties
     // optional name, vec<var, expr>, Vec<var, default expr> has_varargs?, body
     FunDecl(
         Option<String>,
@@ -207,6 +209,21 @@ impl<'a> Parser<'a> {
             }
         };
 
+        let mut superclass_opt = None;
+        if self.match_next(&[LeftArrow]).is_some() {
+            superclass_opt = match self.cur_token.token_type {
+                Identifier(_) => Some(self.consume_token()),
+
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::Fatal(SyntaxError),
+                        format!("Expected superclass name. Found `{}`.", self.cur_token),
+                        &self.cur_token,
+                    ))
+                }
+            }
+        }
+
         if self.match_next(&[LeftBrace]).is_none() {
             return Err(Error::new(
                 ErrorKind::Fatal(SyntaxError),
@@ -284,7 +301,7 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        Ok(Stmt::ClassDecl(class_name, stmts))
+        Ok(Stmt::ClassDecl(class_name, superclass_opt, stmts))
     }
 
     fn fun_declaration(&mut self) -> Result<Stmt> {
@@ -1190,6 +1207,36 @@ impl<'a> Parser<'a> {
                     has_varargs,
                     Box::new(stmt),
                 ))
+            }
+
+            // Super
+            Super => {
+                if self.match_next(&[Dot]).is_none() {
+                    return Err(Error::new(
+                        ErrorKind::Fatal(ParseError),
+                        format!("Expected `.` after `super`. Found {}.", self.cur_token),
+                        &self.cur_token,
+                    ));
+                }
+
+                let super_token = cur_token.clone();
+
+                let method_token = match &self.cur_token.token_type {
+                    Identifier(_) => self.consume_token(),
+
+                    _ => {
+                        return Err(Error::new(
+                            ErrorKind::Fatal(UnexpectedToken),
+                            format!(
+                                "Expected method name after `super.`. Found `{}`.",
+                                self.cur_token,
+                            ),
+                            &self.cur_token,
+                        ))
+                    }
+                };
+
+                Ok(Expr::Super(super_token, method_token))
             }
 
             ref tt if self.check_binary(tt) => Err(Error::new(

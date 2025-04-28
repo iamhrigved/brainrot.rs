@@ -6,7 +6,7 @@ _mot much brainrot, tbh_ 🤷
 
 ## Documentation
 
-Docs are coking... In the meantime, here's a lil hello-world program!
+Docs are cooking... In the meantime, here's a lil hello-world program!
 
 ```
 print "Hello, from brainrot!";
